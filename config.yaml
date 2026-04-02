@@ -1,0 +1,88 @@
+digest_time_utc: "16:00"
+breaking_lookback_hours: 2
+digest_lookback_hours: 24
+state_retention_days: 7
+max_digest_items: 8
+together_model: "meta-llama/Meta-Llama-3-8B-Instruct-Lite"
+
+tier1_sources:
+  - anthropic.com
+  - openai.com
+  - deepmind.google
+  - nvidianews.nvidia.com
+  - ai.meta.com
+  - together.ai
+
+breaking_keywords:
+  - release
+  - launch
+  - announce
+  - introduces
+  - price cut
+  - pricing
+  - cost reduction
+  - free tier
+  - acqui
+  - raises
+  - funding
+  - partnership
+  - gpu
+  - h200
+  - b200
+  - gb300
+  - data center
+  - ban
+  - regulation
+  - executive order
+
+sources:
+  tier1:
+    - name: "Anthropic Blog"
+      url: "https://www.anthropic.com/news"
+      type: scrape
+      domain: "anthropic.com"
+    - name: "OpenAI Blog"
+      url: "https://openai.com/news/rss.xml"
+      type: rss
+      domain: "openai.com"
+    - name: "Google DeepMind"
+      url: "https://deepmind.google/discover/blog/rss"
+      type: rss
+      domain: "deepmind.google"
+    - name: "NVIDIA News"
+      url: "https://nvidianews.nvidia.com/rss/all.xml"
+      type: rss
+      domain: "nvidianews.nvidia.com"
+    - name: "Meta AI"
+      url: "https://ai.meta.com/blog/feed"
+      type: rss
+      domain: "ai.meta.com"
+    - name: "Together AI Blog"
+      url: "https://www.together.ai/blog/rss"
+      type: rss
+      domain: "together.ai"
+  standard:
+    - name: "TLDR AI"
+      url: "https://tldr.tech/api/rss/ai"
+      type: rss
+      domain: "tldr.tech"
+    - name: "Import AI"
+      url: "https://importai.substack.com/feed"
+      type: rss
+      domain: "importai.substack.com"
+    - name: "Interconnects"
+      url: "https://www.interconnects.ai/feed"
+      type: rss
+      domain: "interconnects.ai"
+    - name: "The Neuron"
+      url: "https://www.theneuronnewsletter.com/feed"
+      type: rss
+      domain: "theneuronnewsletter.com"
+    - name: "Ben's Bites"
+      url: "https://bensbites.beehiiv.com/feed"
+      type: rss
+      domain: "bensbites.beehiiv.com"
+    - name: "Ahead of AI"
+      url: "https://magazine.sebastianraschka.com/feed"
+      type: rss
+      domain: "magazine.sebastianraschka.com"
