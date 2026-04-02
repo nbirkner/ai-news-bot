@@ -7,8 +7,7 @@ from src.models import Article
 
 def format_breaking(article: Article) -> dict:
     lines = [
-        "🚨 BREAKING AI NEWS",
-        article.title,
+        f"🚨 BREAKING: {article.title}",
         "",
         article.summary or article.content_preview[:200],
     ]
@@ -16,6 +15,16 @@ def format_breaking(article: Article) -> dict:
         lines += ["", f"Why it matters for Together: {article.why_it_matters}"]
     lines += ["", f"{article.url}  —  {article.source_name}"]
     return {"text": "\n".join(lines)}
+
+
+def _format_article(article: Article) -> str:
+    lines = [
+        f"📌 {article.title}",
+        article.summary or article.content_preview[:120],
+        f"{article.url}  —  {article.source_name}",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def format_digest(articles: list) -> Optional[dict]:
@@ -29,18 +38,16 @@ def format_digest(articles: list) -> Optional[dict]:
     industry_articles = [a for a in articles if not a.relevant_to_together]
 
     if together_articles:
-        lines.append("RELEVANT TO TOGETHER AI")
-        for a in together_articles:
-            bullet = f"• {a.title}: {a.summary or a.content_preview[:120]}"
-            lines.append(bullet)
+        lines.append("━━━ RELEVANT TO TOGETHER AI ━━━")
         lines.append("")
+        for a in together_articles:
+            lines.append(_format_article(a))
 
     if industry_articles:
-        lines.append("INDUSTRY")
-        for a in industry_articles:
-            bullet = f"• {a.title}: {a.summary or a.content_preview[:120]}"
-            lines.append(bullet)
+        lines.append("━━━ INDUSTRY ━━━")
         lines.append("")
+        for a in industry_articles:
+            lines.append(_format_article(a))
 
     source_names = sorted({a.source_name for a in articles})
     lines.append(f"Sources: {', '.join(source_names)}")

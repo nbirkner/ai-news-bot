@@ -18,7 +18,18 @@ def _parse_datetime(entry) -> datetime:
 
 
 def fetch_rss(source_name: str, source_url: str, source_domain: str) -> list:
-    feed = feedparser.parse(source_url)
+    # Fetch via requests first (feedparser.parse(url) gets blocked by many sites)
+    try:
+        resp = requests.get(
+            source_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ai-news-bot/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.text)
+    except requests.RequestException as e:
+        print(f"Warning: RSS fetch failed for {source_url}: {e}", file=sys.stderr)
+        return []
     articles = []
     for entry in feed.entries:
         content = ""
