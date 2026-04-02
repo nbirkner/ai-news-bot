@@ -2,7 +2,7 @@ digest_time_utc: "16:00"
 breaking_lookback_hours: 2
 digest_lookback_hours: 24
 state_retention_days: 7
-max_digest_items: 10
+max_digest_items: 7
 max_articles_per_source: 3
 together_model: "meta-llama/Meta-Llama-3-8B-Instruct-Lite"
 
