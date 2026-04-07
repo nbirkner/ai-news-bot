@@ -14,7 +14,7 @@ def format_breaking(article: Article) -> dict:
     if article.why_it_matters:
         lines += ["", f"Why it matters for Together: {article.why_it_matters}"]
     lines += ["", f"{article.url}  —  {article.source_name}"]
-    return {"text": "\n".join(lines)}
+    return {"text": "\n".join(lines), "unfurl_links": False, "unfurl_media": False}
 
 
 def _format_article(article: Article) -> str:
@@ -25,6 +25,18 @@ def _format_article(article: Article) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def format_relevant(article: Article) -> dict:
+    lines = [
+        f"📌 {article.title}",
+        "",
+        article.summary or article.content_preview[:200],
+    ]
+    if article.why_it_matters:
+        lines += ["", f"Why it matters: {article.why_it_matters}"]
+    lines += ["", f"{article.url}  —  {article.source_name}"]
+    return {"text": "\n".join(lines), "unfurl_links": False, "unfurl_media": False}
 
 
 def format_digest(articles: list) -> Optional[dict]:
@@ -52,7 +64,7 @@ def format_digest(articles: list) -> Optional[dict]:
     source_names = sorted({a.source_name for a in articles})
     lines.append(f"Sources: {', '.join(source_names)}")
 
-    return {"text": "\n".join(lines)}
+    return {"text": "\n".join(lines), "unfurl_links": False, "unfurl_media": False}
 
 
 def post_to_slack(payload: dict, webhook_url: str) -> None:
