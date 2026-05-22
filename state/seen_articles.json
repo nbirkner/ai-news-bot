@@ -15,6 +15,7 @@
   "https://openai.com/index/adventhealth": "2026-05-21T17:58:39.721665+00:00",
   "https://openai.com/index/databricks": "2026-05-16T16:58:26.370696+00:00",
   "https://openai.com/index/dell-codex-enterprise-partnership": "2026-05-18T18:00:36.384691+00:00",
+  "https://openai.com/index/gartner-2026-agentic-coding-leader": "2026-05-22T17:50:42.015495+00:00",
   "https://openai.com/index/introducing-openai-for-singapore": "2026-05-20T18:17:07.682339+00:00",
   "https://openai.com/index/malta-chatgpt-plus-partnership": "2026-05-16T16:58:26.370674+00:00",
   "https://openai.com/index/ramp": "2026-05-21T17:58:39.721680+00:00",
@@ -23,6 +24,8 @@
   "https://tldr.tech/ai/2026-05-19": "2026-05-19T18:05:30.760474+00:00",
   "https://tldr.tech/ai/2026-05-20": "2026-05-20T18:17:07.682344+00:00",
   "https://tldr.tech/ai/2026-05-21": "2026-05-21T17:58:39.721685+00:00",
+  "https://tldr.tech/ai/2026-05-22": "2026-05-22T17:50:42.015503+00:00",
+  "https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy": "2026-05-22T17:50:42.015480+00:00",
   "https://www.bensbites.com/p/agents-feedback-tip": "2026-05-21T17:58:39.721691+00:00",
   "https://www.bensbites.com/p/bens-builds-3-an-email-app": "2026-05-16T16:58:26.370699+00:00",
   "https://www.bensbites.com/p/can-i-get-my-agents-on-the-phone": "2026-05-19T18:05:30.760482+00:00",
@@ -32,5 +35,6 @@
   "https://www.interconnects.ai/p/latest-open-artifacts-21-open-model": "2026-05-17T16:57:21.899447+00:00",
   "https://www.interconnects.ai/p/notes-from-inside-chinas-ai-labs": "2026-05-21T17:58:39.721687+00:00",
   "https://www.together.ai/blog/coding-agent-benchmarks": "2026-05-20T18:17:07.682342+00:00",
+  "https://www.together.ai/blog/together-ai-partners-with-pearl-research-labs": "2026-05-22T17:50:42.015500+00:00",
   "https://www.together.ai/blog/violin-open-source-translation-skill": "2026-05-21T17:58:39.721683+00:00"
 }
