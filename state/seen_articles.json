@@ -9,15 +9,19 @@
   "https://magazine.sebastianraschka.com/p/llm-research-papers-2026-part1": "2026-07-06T18:10:52.357214+00:00",
   "https://magazine.sebastianraschka.com/p/recent-developments-in-llm-architectures": "2026-07-06T18:10:52.357216+00:00",
   "https://magazine.sebastianraschka.com/p/using-local-coding-agents": "2026-07-05T17:09:43.795619+00:00",
+  "https://openai.com/index/australian-payments-plus": "2026-07-08T17:35:24.955253+00:00",
   "https://openai.com/index/core-dump-epidemiology-data-infrastructure-bug": "2026-07-07T17:58:32.376293+00:00",
   "https://openai.com/index/genebench-pro/case-studies": "2026-07-02T17:47:05.911781+00:00",
   "https://openai.com/index/how-chatgpt-adoption-has-expanded": "2026-07-07T17:58:32.376289+00:00",
   "https://openai.com/index/introducing-genebench-pro": "2026-07-07T17:58:32.376296+00:00",
+  "https://openai.com/index/introducing-gpt-live": "2026-07-08T17:35:24.955249+00:00",
+  "https://openai.com/index/k-12-educators-practical-skills": "2026-07-08T17:35:24.955231+00:00",
   "https://tldr.tech/ai/2026-07-01": "2026-07-01T17:55:07.694971+00:00",
   "https://tldr.tech/ai/2026-07-02": "2026-07-02T17:47:05.911793+00:00",
   "https://tldr.tech/ai/2026-07-03": "2026-07-03T17:25:16.606044+00:00",
   "https://tldr.tech/ai/2026-07-06": "2026-07-06T18:10:52.357208+00:00",
   "https://tldr.tech/ai/2026-07-07": "2026-07-07T17:58:32.376304+00:00",
+  "https://tldr.tech/ai/2026-07-08": "2026-07-08T17:35:24.955258+00:00",
   "https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy": "2026-07-06T18:10:52.357193+00:00",
   "https://www.bensbites.com/p/claude-code-in-slack": "2026-07-03T17:25:16.606047+00:00",
   "https://www.bensbites.com/p/fable-is-back": "2026-07-02T17:47:05.911797+00:00",
@@ -29,5 +33,6 @@
   "https://www.interconnects.ai/p/glm-52-is-the-step-change-for-open": "2026-07-07T17:58:32.376311+00:00",
   "https://www.together.ai/blog/announcing-our-series-c": "2026-07-01T17:55:07.694966+00:00",
   "https://www.together.ai/blog/icml-2026": "2026-07-07T17:58:32.376302+00:00",
-  "https://www.together.ai/blog/parallelkernelbench": "2026-07-01T17:55:07.694968+00:00"
+  "https://www.together.ai/blog/parallelkernelbench": "2026-07-01T17:55:07.694968+00:00",
+  "https://www.together.ai/blog/provisioned-throughput": "2026-07-08T17:35:24.955255+00:00"
 }
