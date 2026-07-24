@@ -1,5 +1,6 @@
 {
   "https://anthropic.com/news/anthropic-economic-index-connector": "2026-07-22T17:18:16.835780+00:00",
+  "https://anthropic.com/news/claude-opus-5": "2026-07-24T17:36:52.385516+00:00",
   "https://anthropic.com/news/donation-public-first-action": "2026-07-22T17:18:16.835783+00:00",
   "https://anthropic.com/news/economic-futures-research-fund-agenda": "2026-07-22T17:18:16.835764+00:00",
   "https://anthropic.com/news/rare-disease-research-grants": "2026-07-20T18:01:45.204388+00:00",
@@ -21,6 +22,7 @@
   "https://tldr.tech/ai/2026-07-21": "2026-07-21T17:18:26.437171+00:00",
   "https://tldr.tech/ai/2026-07-22": "2026-07-22T17:18:16.835792+00:00",
   "https://tldr.tech/ai/2026-07-23": "2026-07-23T17:22:05.914765+00:00",
+  "https://tldr.tech/ai/2026-07-24": "2026-07-24T17:36:52.385533+00:00",
   "https://www.anthropic.com/news/announcing-our-updated-responsible-scaling-policy": "2026-07-21T17:18:26.437145+00:00",
   "https://www.bensbites.com/p/better-design-than-fable": "2026-07-21T17:18:26.437175+00:00",
   "https://www.bensbites.com/p/caught-cheating": "2026-07-23T17:22:05.914767+00:00",
@@ -30,6 +32,8 @@
   "https://www.interconnects.ai/p/artifacts-22-zyphra-cohere-and-poolside": "2026-07-21T17:18:26.437173+00:00",
   "https://www.interconnects.ai/p/kimi-k3-the-open-weights-escalation": "2026-07-20T18:01:45.204417+00:00",
   "https://www.interconnects.ai/p/open-models-recap-more-on-kimi-k3": "2026-07-22T17:18:16.835798+00:00",
+  "https://www.together.ai/blog/99-9-uptime-for-inference": "2026-07-24T17:36:52.385531+00:00",
+  "https://www.together.ai/blog/the-production-platform-for-open-weight-ai-inference": "2026-07-24T17:36:52.385527+00:00",
   "https://www.together.ai/blog/together-ai-brings-thinking-machines-labs-new-model-inkling-on-day-0": "2026-07-23T17:22:05.914763+00:00",
   "https://www.together.ai/blog/together-yc-gpu-cluster": "2026-07-20T18:01:45.204412+00:00"
 }
