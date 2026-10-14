@@ -1,0 +1,139 @@
+import re
+
+from src.dedupe import model_signature, same_event
+
+# Points come from the headline only. Excerpts mention product names inside
+# customer stories and would otherwise promote those posts.
+
+_MODEL = re.compile(
+    r"\b(gpt-\d|gpt \d|claude \d|gemini \d|llama \d|mistral large|deepseek-?\d)\b",
+    re.I,
+)
+_STRONG_POLICY = re.compile(
+    r"\b(regulat\w*|lawsuit|sues|sued|sue\b|executive order|export control|"
+    r"antitrust|bankrupt\w*|midterms?|election)\b",
+    re.I,
+)
+_MILD_POLICY = re.compile(r"\b(polic(?:y|ies)|legislation|memorandum|\bmou\b)\b", re.I)
+_STRONG_SAFETY = re.compile(
+    r"\b(jailbreaks?|vulnerabilit\w*|zero-day|cyber ?attacks?|espionage|"
+    r"spies|spying|data breach|responsible scaling)\b",
+    re.I,
+)
+_MILD_SAFETY = re.compile(r"\b(safety|security|misuse|bio-?risk)\b", re.I)
+_INFRA = re.compile(
+    r"\b(vllm|sg ?lang|inference|tensorrt|cuda|blackwell|gpu|chip|accelerator)\b",
+    re.I,
+)
+_DEAL = re.compile(
+    r"\b(acqui(?:res|red|sition)|merger|funding round|series [a-e]|raises \$)\b",
+    re.I,
+)
+_AGENTS = re.compile(r"\bagents?\b|\bcomputer use\b|\btool use\b", re.I)
+_OPEN_WEIGHTS = re.compile(r"\bopen[- ]weights?\b|\bopen source model\b", re.I)
+
+_OPINION = re.compile(
+    r"\b(podcast|newsletter|opinion|essay|commentary)\b|\bthe ai race\b",
+    re.I,
+)
+_MARKET = re.compile(
+    r"\b(nasdaq|wall street|stocks?|shares|s&p|dow jones|rout)\b",
+    re.I,
+)
+_PRERELEASE = re.compile(
+    r"(?<![A-Za-z])rc\d*\b|release candidate|pre-release|\bproto-",
+    re.I,
+)
+_OFFICE = re.compile(r"\boffices?\b|\bnew hub\b", re.I)
+_CUSTOMER = re.compile(
+    r"^(?:How\s+)?[A-Z0-9][\w.&'-]*(?:\s+[A-Z0-9][\w.&'-]*){0,5}\s+"
+    r"(?i:cuts|saves|uses|partners|brings|runs|deploys|takes|puts)\b"
+)
+
+_KIND_BONUS = {"lab": 3, "release": 2, "news": 1, "paper": 0}
+
+
+def score_article(article) -> int:
+    title = article.title or ""
+    score = _KIND_BONUS.get(article.source_kind, 0)
+    has_model = _MODEL.search(title) is not None
+    if has_model:
+        score += 8
+    if _STRONG_POLICY.search(title):
+        score += 6
+    elif _MILD_POLICY.search(title):
+        score += 4
+    if _STRONG_SAFETY.search(title):
+        score += 6
+    elif _MILD_SAFETY.search(title) and not has_model:
+        score += 3
+    if _INFRA.search(title):
+        score += 4
+    if _DEAL.search(title):
+        score += 5
+    if _AGENTS.search(title):
+        score += 2
+    if _OPEN_WEIGHTS.search(title) and not has_model:
+        score += 3
+    if _OPINION.search(title):
+        score -= 6
+    if _MARKET.search(title):
+        score -= 6
+    if _PRERELEASE.search(title):
+        score -= 5
+    if _OFFICE.search(title):
+        score -= 4
+    if _CUSTOMER.search(title):
+        score -= 6
+    return score
+
+
+def select_items(
+    articles: list,
+    *,
+    limit: int = 6,
+    material_score: int = 6,
+    paper_min_score: int = 9,
+    max_per_source: int = 2,
+    max_per_signature: int = 1,
+) -> list:
+    """Highest score first. On a tie, keep the earlier piece (the announcement)."""
+    ranked = sorted(
+        articles,
+        key=lambda article: (
+            score_article(article),
+            -article.published_at.timestamp(),
+        ),
+        reverse=True,
+    )
+    chosen = []
+    per_source = {}
+    per_signature = {}
+    papers = 0
+    for article in ranked:
+        score = score_article(article)
+        if score < material_score:
+            break
+        if article.source_kind == "paper":
+            if score < paper_min_score or papers >= 1:
+                continue
+        if per_source.get(article.source_name, 0) >= max_per_source:
+            continue
+        signature = model_signature(article.title)
+        if signature and per_signature.get(signature, 0) >= max_per_signature:
+            continue
+        if any(
+            same_event(article, previous)
+            and article.source_priority >= previous.source_priority
+            for previous in chosen
+        ):
+            continue
+        chosen.append(article)
+        per_source[article.source_name] = per_source.get(article.source_name, 0) + 1
+        if signature:
+            per_signature[signature] = per_signature.get(signature, 0) + 1
+        if article.source_kind == "paper":
+            papers += 1
+        if len(chosen) >= limit:
+            break
+    return chosen

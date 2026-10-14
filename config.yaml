@@ -1,77 +1,98 @@
-digest_time_utc: "16:00"
-breaking_lookback_hours: 2
-digest_lookback_hours: 24
-state_retention_days: 7
-max_digest_items: 7
-max_articles_per_source: 3
-together_model: "meta-llama/Meta-Llama-3-8B-Instruct-Lite"
-
-tier1_sources:
-  - anthropic.com
-  - openai.com
-  - deepmind.google
-  - nvidianews.nvidia.com
-  - ai.meta.com
-  - together.ai
-
-breaking_keywords:
-  - release
-  - launch
-  - announce
-  - introduces
-  - price cut
-  - pricing
-  - cost reduction
-  - free tier
-  - acqui
-  - raises
-  - funding
-  - partnership
-  - gpu
-  - h200
-  - b200
-  - gb300
-  - data center
-  - ban
-  - regulation
-  - executive order
+# Monday / Wednesday / Friday at 15:00 UTC.
+# 8:00 AM Pacific Daylight Time, 7:00 AM Pacific Standard Time.
+# GitHub Actions cron does not follow daylight saving, so the UTC hour stays put.
+lookback_fallback_hours: 80
+max_lookback_hours: 168
+state_retention_days: 21
+max_items: 6
+material_score: 6
+paper_min_score: 9
+max_per_source: 8
+max_per_source_in_briefing: 2
+max_per_signature: 1
+together_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
 sources:
-  tier1:
-    - name: "Anthropic Blog"
-      url: "https://www.anthropic.com/news"
-      type: scrape
-      domain: "anthropic.com"
-    - name: "OpenAI Blog"
-      url: "https://openai.com/news/rss.xml"
-      type: rss
-      domain: "openai.com"
-    - name: "Google DeepMind"
-      url: "https://deepmind.google/blog/rss.xml"
-      type: rss
-      domain: "deepmind.google"
-    - name: "Together AI Blog"
-      url: "https://www.together.ai/blog/rss.xml"
-      type: rss
-      domain: "together.ai"
-  standard:
-    - name: "TLDR AI"
-      url: "https://tldr.tech/api/rss/ai"
-      type: rss
-      domain: "tldr.tech"
-    - name: "Import AI"
-      url: "https://importai.substack.com/feed"
-      type: rss
-      domain: "importai.substack.com"
-    - name: "Interconnects"
-      url: "https://www.interconnects.ai/feed"
-      type: rss
-      domain: "interconnects.ai"
-    - name: "Ben's Bites"
-      url: "https://bensbites.com/feed"
-      type: rss
-      domain: "bensbites.com"
-    - name: "Ahead of AI"
-      url: "https://magazine.sebastianraschka.com/feed"
-      type: rss
-      domain: "magazine.sebastianraschka.com"
+  - name: OpenAI
+    url: "https://openai.com/news/rss.xml"
+    type: rss
+    domain: openai.com
+    kind: lab
+    priority: 1
+  - name: Anthropic
+    url: "https://www.anthropic.com/news"
+    type: html
+    parser: anthropic
+    domain: anthropic.com
+    kind: lab
+    priority: 1
+  - name: Google DeepMind
+    url: "https://deepmind.google/blog/rss.xml"
+    type: rss
+    domain: deepmind.google
+    kind: lab
+    priority: 1
+  - name: Google
+    url: "https://blog.google/technology/ai/rss/"
+    type: rss
+    domain: blog.google
+    kind: lab
+    priority: 1
+  - name: Meta AI
+    url: "https://ai.meta.com/blog/"
+    type: html
+    parser: meta
+    domain: ai.meta.com
+    kind: lab
+    priority: 1
+  - name: Mistral
+    url: "https://mistral.ai/news/rss"
+    type: rss
+    domain: mistral.ai
+    kind: lab
+    priority: 1
+  - name: NVIDIA
+    url: "https://blogs.nvidia.com/blog/category/generative-ai/feed/"
+    type: rss
+    domain: blogs.nvidia.com
+    kind: lab
+    priority: 1
+  - name: Reuters
+    url: "https://www.reuters.com/arc/outboundfeeds/news-sitemap/?outputType=xml"
+    type: reuters
+    domain: reuters.com
+    kind: news
+    priority: 2
+  - name: vLLM
+    url: "https://github.com/vllm-project/vllm/releases.atom"
+    type: rss
+    domain: github.com
+    kind: release
+    priority: 2
+  - name: SGLang
+    url: "https://github.com/sgl-project/sglang/releases.atom"
+    type: rss
+    domain: github.com
+    kind: release
+    priority: 2
+  - name: Axios
+    url: "https://api.axios.com/feed/"
+    type: rss
+    domain: axios.com
+    kind: news
+    priority: 3
+    require_ai: true
+  - name: The Verge
+    url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
+    type: rss
+    domain: theverge.com
+    kind: news
+    priority: 3
+  - name: arXiv
+    url: "https://export.arxiv.org/api/query"
+    type: arxiv
+    domain: arxiv.org
+    kind: paper
+    priority: 4
+    max_results: 8
+    query: '(cat:cs.CL OR cat:cs.LG OR cat:cs.AI) AND (ti:"language model" OR ti:inference OR ti:jailbreak OR ti:"open weight" OR ti:vllm OR ti:"mixture of experts")'

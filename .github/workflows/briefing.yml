@@ -1,0 +1,56 @@
+name: AI briefing
+
+on:
+  schedule:
+    # 15:00 UTC on Monday, Wednesday, and Friday.
+    # 8:00 AM Pacific during daylight time, 7:00 AM Pacific during standard time.
+    - cron: "0 15 * * 1,3,5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the briefing and do not post to Slack"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ai-briefing
+  cancel-in-progress: false
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Uses the built-in token. If a repo still has GH_PAT, that token is used instead.
+          token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Build briefing
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        run: python main_briefing.py
+
+      - name: Save briefing state
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen_articles.json state/last_briefing.json
+          if git diff --staged --quiet; then
+            echo "No state changes."
+          else
+            git commit -m "chore: update briefing state [skip ci]"
+            git push
+          fi
