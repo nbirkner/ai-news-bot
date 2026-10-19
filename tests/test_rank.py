@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from src.models import Article
-from src.rank import score_article, select_items
+from src.rank import hard_noise, score_article, select_items
 
 
 def article(title, *, kind="news", url="https://example.com/a", source="Example", hours=10):
@@ -23,6 +23,14 @@ def test_model_launch_scores_above_the_bar():
 
 def test_lawsuit_scores_above_the_bar():
     assert score_article(article("Eight US states sue OpenAI, claiming ChatGPT harms children")) >= 6
+
+
+def test_together_private_headline_is_noise_and_a_public_release_is_not():
+    private = article("Together AI revenue update for internal customers")
+    public = article("Together AI releases an open model", kind="lab", source="Together")
+    assert hard_noise(private)
+    assert not hard_noise(public)
+    assert score_article(private) < 6 or hard_noise(private)
 
 
 def test_customer_story_stays_under_the_bar():

@@ -22,7 +22,7 @@ def slack_link(url: str, label: str) -> str:
 
 
 def render_briefing(now: datetime, since: datetime, items: list, lede: str = "") -> str:
-    header = f"*AI briefing, {_when(now)}*"
+    header = f"*AI news, {_when(now)}*"
     if not items:
         return (
             f"{header}\n"

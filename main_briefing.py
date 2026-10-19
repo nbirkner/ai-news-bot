@@ -1,8 +1,10 @@
 """
 Mon/Wed/Fri AI briefing.
 
-Prints the message. Posts to Slack only when DRY_RUN is off and both
-TOGETHER_API_KEY and SLACK_WEBHOOK_URL are set. A dry run never posts.
+Prints the message. A live run posts to Slack, commits an MDX issue to the
+site archive, and sends the Buttondown email when those credentials are set.
+BUTTONDOWN_API_KEY and SITE_GITHUB_TOKEN are optional: a missing one skips
+that channel and does not fail the run. A dry run never publishes.
 
 Dry-run window override (ignored on a live post):
   --since 2026-10-16T15:00:00Z
@@ -83,6 +85,7 @@ def main(argv=None) -> None:
             exa_api_key=os.environ.get("EXA_API_KEY") or None,
             since_override=since,
             expect_headlines=expect_from_args(argv) or None,
+            artifact_dir=os.environ.get("ARTIFACT_DIR") if dry_run else None,
         )
     except BriefingError as exc:
         if exc.text:

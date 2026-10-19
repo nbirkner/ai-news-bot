@@ -411,6 +411,7 @@ def test_llm_rank_path_posts_a_low_score_story_on_dry_run(tmp_path):
         fetcher=lambda config, since, now: FetchReport(articles=articles, failures=[], successes=3),
         poster=boom,
         composer=composer,
+        url_checker=lambda url: (True, "ok"),
         expect_headlines=["Anthropic federal bill Politico", "DeepSeek V4.1-Flash-1017"],
     )
     assert "safety bill" in text

@@ -16,15 +16,15 @@ from src.models import Article
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
 
 _WHY = {
-    "policy": "A legal or policy move changes the constraints on building and shipping AI products.",
-    "safety": "A safety or security development changes the risks teams have to plan for.",
+    "policy": "A legal or policy move changes the rules for how AI is built and used.",
+    "safety": "A safety or security development changes the risks people have to plan for.",
     "deal": "A deal can shift who has the models, the compute, or the distribution.",
-    "model": "A model release changes what products can do and what serving stacks need to run.",
-    "infra": "An inference or hardware change affects the cost and latency of running models.",
-    "agents": "An agent update changes how teams connect models to tools and longer tasks.",
-    "paper": "A research result worth a look if you train or evaluate models.",
-    "release": "A serving-stack release affects how teams deploy open models.",
-    "other": "Worth a look for teams that build or run AI systems.",
+    "model": "A model release changes what AI systems can do.",
+    "infra": "An infrastructure change affects the cost and availability of running models.",
+    "agents": "An agent update changes how people connect models to tools and longer tasks.",
+    "paper": "A research result worth a look if you follow how models are trained or evaluated.",
+    "release": "A software release affects how people run open models.",
+    "other": "Worth a look for anyone following AI.",
 }
 
 _TOPICS = (
@@ -53,6 +53,43 @@ class AuthError(Exception):
     """The Together key or model name was rejected. Do not post a fallback."""
 
 
+class SchemaError(Exception):
+    """Model output missed the briefing schema. Do not publish a fallback."""
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_items(items) -> list:
+    """Structural checks for the items array. Empty is valid."""
+    if not isinstance(items, list):
+        return ["items must be a list"]
+    errors = []
+    for index, row in enumerate(items):
+        if not isinstance(row, dict):
+            errors.append(f"items[{index}] must be an object")
+            continue
+        if not _is_int(row.get("index")):
+            errors.append(f"items[{index}].index must be an integer")
+        for field in ("what_happened", "why_it_matters"):
+            value = row.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"items[{index}].{field} must be a non-empty string")
+    return errors
+
+
+def validate_ranking(payload) -> list:
+    """Schema for the rank-and-write response. Field errors only, never the raw text."""
+    if not isinstance(payload, dict):
+        return ["response is not a JSON object"]
+    errors = []
+    if not isinstance(payload.get("lede"), str):
+        errors.append("lede must be a string")
+    errors.extend(validate_items(payload.get("items")))
+    return errors
+
+
 def _first_person(sentence: str) -> bool:
     return bool(re.match(r"^(we|we're|we’re|our|i|i'm|i’m|my)\b", sentence.strip(), re.I))
 
@@ -60,13 +97,13 @@ def _first_person(sentence: str) -> bool:
 def _why_for(article: Article) -> str:
     title = article.title or ""
     if re.search(r"\b(sues?|sued|lawsuit)\b", title, re.I):
-        return "A lawsuit changes the legal risk of shipping a model to the public."
+        return "A lawsuit changes the legal risk around a model the public can use."
     if re.search(r"\b(midterms?|election|voting|ballot)\b", title, re.I):
         return "Election season is a constraint on how public models are shipped and monitored."
     if re.search(r"\bbankrupt", title, re.I):
         return "A bankruptcy can decide what happens to the product and to the people who use it."
     if re.search(r"\b(spies|spy|espionage|jailbreak)\b", title, re.I):
-        return "A security hole in model tools is a risk for any company that gives them access to internal systems."
+        return "A security hole in model tools is a risk for anyone who connects those tools to their own systems."
     return _WHY[topic_for(article)]
 
 
@@ -188,12 +225,14 @@ def _item_payload(article: Article, index: int) -> dict:
 
 def _prompt(articles: list) -> str:
     items = [_item_payload(article, index) for index, article in enumerate(articles)]
-    return f"""You write lines for a Slack briefing read by people who build AI products and infrastructure.
+    return f"""You write lines for a general public AI news briefing.
 
 Rules:
+- This is public news. It is not written for a company, a customer list, or an internal audience.
+- Do not mention Together AI products, customers, revenue, or private information. Do not use a for Together angle or an internal name.
 - Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
 - what_happened: one plain sentence on what the source says happened. Keep concrete details that are in the text: prices, benchmark numbers, dates, and availability. If the text says a figure is company-reported or unaudited, keep that caveat.
-- why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
+- why_it_matters: one plain sentence on why a general reader should care. Interpretation is allowed. New facts are not.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 - Plain, warm tone.
 - Keep each sentence under 220 characters.
@@ -230,11 +269,19 @@ def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth
         return fallbacks
 
     payload = _parse_json_object(raw)
-    rows = payload.get("items") if payload else None
-    if not isinstance(rows, list):
-        print("Warning: Together returned no items. Using source text.", file=sys.stderr)
+    errors = validate_items(payload.get("items") if isinstance(payload, dict) else None)
+    if payload is None:
+        errors = ["response is not a JSON object"]
+    if errors:
+        if strict_auth:
+            raise SchemaError("; ".join(errors))
+        print(
+            f"Warning: model output failed schema validation ({'; '.join(errors)}). Using source text.",
+            file=sys.stderr,
+        )
         return fallbacks
 
+    rows = payload["items"]
     by_index = {}
     for row in rows:
         if isinstance(row, dict) and isinstance(row.get("index"), int):
@@ -268,12 +315,12 @@ def theme_lede(articles: list) -> str:
     if re.search(r"raise|funding|billion|acqui", blob):
         themes.append("funding")
     if not themes:
-        return "A handful of developments for people building and running AI systems."
+        return "A handful of AI developments from the sources we watch."
     if len(themes) == 1:
         body = themes[0]
     else:
         body = ", ".join(themes[:-1]) + " and " + themes[-1]
-    return f"For people building and running AI systems, this window is mostly about {body}."
+    return f"This window is mostly about {body}."
 
 
 def _rank_prompt(articles: list, recent: list, limit: int) -> str:
@@ -283,20 +330,22 @@ def _rank_prompt(articles: list, recent: list, limit: int) -> str:
         for item in (recent or [])
         if item.get("title")
     ]
-    return f"""You rank and write a Slack briefing for people who build AI products and infrastructure.
+    return f"""You rank and write a general public AI news briefing.
 
 Compare the candidates against each other. Order is not a ranking.
-Choose the items that would change what a builder ships, what it costs to run, or what they have to comply with.
-Prefer a material story over a routine patch note. Include a release note only when it changes serving in a way that matters this week.
+Choose items a general reader would want: a model release, a policy or legal move, a research result, a major product launch, funding, or an infrastructure change that affects who can use AI.
+Do not rank a story higher because it helps one inference vendor. Skip customer stories.
+Do not mention Together AI products, customers, revenue, or private information. Do not use a for Together angle or an internal name.
+Prefer a material story over a routine patch note. Include a release note only when it changes how models run in a way that matters this week.
 Skip stories that are already in the recent briefings unless the new piece is a real development.
 Return between 4 and {limit} items when that many are genuinely material. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
 
 For each chosen item:
 - what_happened: one plain sentence. Keep prices, benchmark numbers, dates, and availability when they are in that item's text. If the text says a figure is company-reported or unaudited, keep that caveat.
-- why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
+- why_it_matters: one plain sentence on why a general reader should care. Interpretation is allowed. New facts are not.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one plain sentence that ties the chosen themes together. No new facts. No hype. No em dashes.
+lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 240 characters.
 Return JSON only.
@@ -350,11 +399,17 @@ def compose_briefing(
         return _fallback_pairs(articles, limit)
 
     payload = _parse_json_object(raw)
-    rows = payload.get("items") if payload else None
-    if not isinstance(rows, list):
-        print("Warning: Together returned no ranking. Using the shortlist order.", file=sys.stderr)
+    errors = validate_ranking(payload)
+    if errors:
+        if strict_auth:
+            raise SchemaError("; ".join(errors))
+        print(
+            f"Warning: model output failed schema validation ({'; '.join(errors)}). Using the shortlist order.",
+            file=sys.stderr,
+        )
         return _fallback_pairs(articles, limit)
 
+    rows = payload["items"]
     pairs = []
     seen = set()
     for row in rows:

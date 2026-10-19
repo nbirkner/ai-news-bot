@@ -1,6 +1,6 @@
 # AI briefing
 
-A standalone GitHub Actions job that posts a short AI briefing to a public Slack channel on Monday, Wednesday, and Friday morning. It reads public lab blogs, news wires, model hubs, and Exa web search. It does not use email, calendars, Notion, or any private notes.
+A standalone GitHub Actions job that publishes a general public AI news digest on Monday, Wednesday, and Friday morning. The same issue goes to a public Slack channel, to `src/content/newsletter/` in [nbirkner/site](https://github.com/nbirkner/site) (the archive at [www.nikibirkner.com/newsletter](https://www.nikibirkner.com/newsletter/)), and to a Buttondown email. It reads public lab blogs, news wires, model hubs, and Exa web search. It does not use calendars, Notion, or any private notes.
 
 If nothing important landed since the previous run, it posts a one-line quiet note instead of filling the channel.
 
@@ -32,9 +32,13 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 
 | Secret | Value |
 | --- | --- |
-| `TOGETHER_API_KEY` | A Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys) |
-| `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
+| `TOGETHER_API_KEY` | A Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). This calls the model. It is not a reason to write about Together. |
+| `SLACK_WEBHOOK_URL` | The incoming webhook from step 2. Create a new one. Do not reuse a webhook that has appeared in git history. |
 | `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) |
+| `BUTTONDOWN_API_KEY` | A Buttondown API key. Optional. If it is unset, the email step logs a skip and the rest of the run continues. |
+| `SITE_GITHUB_TOKEN` | A GitHub token that can commit to `nbirkner/site`. Optional. If it is unset, the archive commit is skipped. |
+
+Set `SITE_REPO` only if the archive repo is not `nbirkner/site`. The file path is `src/content/newsletter/YYYY-MM-DD.mdx`.
 
 `EXA_API_KEY` is optional. Without it the job uses the feeds only and says so in the log. With it, each run also searches Exa for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
 
@@ -42,7 +46,7 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 
 Optional: repository variable `TOGETHER_MODEL` overrides the model in `config.yaml`.
 
-No personal access token is required. Seen URLs and the last few briefings are stored in the Actions cache (`state/`), not in a commit on every run. The cache is written only after a real post. A dry run does not update it. If the cache is cold, the files committed in `state/` are the seed, and the lookback never exceeds 7 days.
+Seen URLs, recent briefings, and published issue keys live in the Actions cache (`state/`), not in a commit on every run. The cache is written only after a real post. A dry run does not update it. If the cache is cold, the files committed in `state/` are the seed, and the lookback never exceeds 7 days. `SITE_GITHUB_TOKEN` is separate: it is only used to commit the MDX file into the site repo.
 
 ### 4. Enable the workflow
 
@@ -92,7 +96,7 @@ Each run covers items published since the previous successful post. The Monday r
 
 ## What gets posted
 
-A one-line lede, then four to seven items when the week supports it, and fewer when it does not. Items are ranked against each other for people building AI products and infrastructure, with the last five posted briefings in mind so a repeat title is skipped.
+A one-line lede, then four to seven items when the week supports it, and fewer when it does not. Items are ranked for a general reader, with the last five posted briefings in mind so a repeat title is skipped. The copy does not take a Together product, customer, or revenue angle.
 
 - frontier models, open weights, and price changes
 - agents and agent security
@@ -119,7 +123,24 @@ After dedupe, the top 15 candidates (configurable with `read_candidates`) are re
 
 ## Memory
 
-`state/recent_briefings.json` keeps the titles and links of the last five real posts. A dry run does not write it. On GitHub Actions the file lives in the Actions cache together with `state/seen_articles.json` and `state/last_briefing.json`, so a routine post does not open a commit.
+`state/recent_briefings.json` keeps the titles and links of the last five real posts. `state/published_issues.json` keeps the idempotency key, URLs, and fingerprint of recent issues. A dry run does not write either file. On GitHub Actions those files live in the Actions cache together with `state/seen_articles.json` and `state/last_briefing.json`, so a routine post does not open a commit in this repo.
+
+## Guardrails
+
+A live run with items publishes only when every check passes. A failure is logged and posted to Slack as an alert. The digest itself is not posted, the site file is not committed, and the email is not sent.
+
+| Check | Blocks when |
+| --- | --- |
+| `source_urls` | Any item lacks an http(s) URL, or the URL does not resolve (connection error, 404, or 410). A bot wall such as 403 still counts as the page existing. |
+| `together_private` | The copy mentions Together AI internals, customers, revenue, or other private material, including a secret-like token. |
+| `substance` | The issue is empty, a what-line is under 8 characters, a why-line is under 20 characters, the whole issue is under 80 characters, or the URLs match the last published issue. |
+| `safety` | The copy contains profanity or a small set of unsafe phrases. |
+| `schema` | Model JSON is missing `lede` or a well-typed item. A live run does not publish a fallback when this fails. |
+| `idempotency` | An issue with the same Pacific-date key (`issue-YYYY-MM-DD`) was already published. That is one issue per scheduled morning. |
+
+A window with nothing worth running is still a quiet Slack note. It does not create a newsletter issue. `BUTTONDOWN_API_KEY` and `SITE_GITHUB_TOKEN` are not guardrails: each missing key skips that one channel.
+
+`DRY_RUN=1`, `--dry-run`, or `python3 dry_run.py` prints the issue and writes MDX plus an HTML email preview under `ARTIFACT_DIR` (default `artifacts/`). It does not post, send, or commit.
 
 ## Tests
 

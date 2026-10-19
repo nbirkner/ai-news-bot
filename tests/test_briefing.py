@@ -40,7 +40,27 @@ def _report(articles):
     return FetchReport(articles=articles, failures=[], successes=3)
 
 
-def _run(tmp_path, articles, *, dry_run, api_key=None, webhook=None, poster=None, seen=None):
+def _allow_url(url):
+    return True, "ok"
+
+
+def _skip_channel(*args, **kwargs):
+    return {"skipped": True}
+
+
+def _run(
+    tmp_path,
+    articles,
+    *,
+    dry_run,
+    api_key=None,
+    webhook=None,
+    poster=None,
+    seen=None,
+    url_checker=_allow_url,
+    site_publisher=_skip_channel,
+    email_publisher=_skip_channel,
+):
     calls = []
 
     def default_poster(payload, url):
@@ -59,6 +79,9 @@ def _run(tmp_path, articles, *, dry_run, api_key=None, webhook=None, poster=None
         fetcher=lambda config, since, now: _report(articles),
         enricher=lambda items: None,
         poster=poster or default_poster,
+        url_checker=url_checker,
+        site_publisher=site_publisher,
+        email_publisher=email_publisher,
     )
     return text, calls
 
@@ -73,7 +96,7 @@ def test_window_uses_last_run_and_caps_outages():
 
 def test_dry_run_prints_and_does_not_post_or_save_state(tmp_path):
     def boom(*args, **kwargs):
-        raise AssertionError("Slack was called during a dry run")
+        raise AssertionError("A channel was called during a dry run")
 
     text, _calls = _run(
         tmp_path,
@@ -81,6 +104,8 @@ def test_dry_run_prints_and_does_not_post_or_save_state(tmp_path):
         dry_run=True,
         webhook="https://hooks.slack.com/services/T/B/secret",
         poster=boom,
+        site_publisher=boom,
+        email_publisher=boom,
     )
     assert "Gemini 4 Argon" in text
     assert "Quiet since" not in text
@@ -129,7 +154,12 @@ def test_live_post_saves_state_and_posts_once(tmp_path, monkeypatch):
 def test_missing_webhook_does_not_post_or_save_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "src.briefing.write_copies",
-        lambda articles, api_key, model, strict_auth: [("Google published Gemini 4 Argon.", "Because.")],
+        lambda articles, api_key, model, strict_auth: [
+            (
+                "Google published Gemini 4 Argon.",
+                "A model release changes what people can do with AI systems.",
+            )
+        ],
     )
     with pytest.raises(BriefingError, match="SLACK_WEBHOOK_URL"):
         _run(tmp_path, [_article()], dry_run=False, api_key="sk-test", webhook=None)
@@ -169,7 +199,11 @@ def test_workflow_schedule_and_secrets():
     assert "0 15 * * 1,3,5" in text
     assert "SLACK_WEBHOOK_URL" in text
     assert "TOGETHER_API_KEY" in text
+    assert "EXA_API_KEY" in text
+    assert "BUTTONDOWN_API_KEY" in text
+    assert "SITE_GITHUB_TOKEN" in text
     assert "github.token" in text
     assert "dry_run" in text
+    assert "hooks.slack.com/triggers/" not in text
     assert not Path(".github/workflows/breaking-check.yml").exists()
     assert not Path(".github/workflows/daily-digest.yml").exists()

@@ -8,6 +8,7 @@ the two lines and they are kept only when they stay grounded in the source.
 import os
 
 os.environ["DRY_RUN"] = "1"
+os.environ.setdefault("ARTIFACT_DIR", "artifacts")
 
 from main_briefing import main  # noqa: E402
 

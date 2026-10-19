@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Print the briefing and do not post to Slack"
+        description: "Print the issue and do not publish to Slack, the site, or email"
         type: boolean
         default: false
       since:
@@ -57,6 +57,8 @@ jobs:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          BUTTONDOWN_API_KEY: ${{ secrets.BUTTONDOWN_API_KEY }}
+          SITE_GITHUB_TOKEN: ${{ secrets.SITE_GITHUB_TOKEN }}
           # Default 30. Set the EXA_MAX_CALLS repo variable to override.
           EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '30' }}
           TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}

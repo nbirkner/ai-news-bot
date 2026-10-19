@@ -23,7 +23,7 @@ def _item(**kwargs):
 def test_render_one_item():
     text = render_briefing(NOW, SINCE, [_item()])
     assert text == (
-        "*AI briefing, Wednesday, October 14*\n"
+        "*AI news, Wednesday, October 14*\n"
         "Since Sunday, October 11.\n"
         "\n"
         "*Eight US states sued OpenAI over harm to children.*\n"
@@ -34,7 +34,7 @@ def test_render_one_item():
 
 def test_render_quiet_note():
     text = render_briefing(NOW, SINCE, [])
-    assert text.startswith("*AI briefing, Wednesday, October 14*\n")
+    assert text.startswith("*AI news, Wednesday, October 14*\n")
     assert "Quiet since Sunday, October 11." in text
     assert "http" not in text
 

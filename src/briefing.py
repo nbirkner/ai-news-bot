@@ -1,3 +1,4 @@
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -7,10 +8,13 @@ from src.dedupe import canonical_url
 from src.discover import prepare_candidates
 from src.expect import coverage_report
 from src.fetch import enrich_previews, fetch_all
+from src.guardrails import Violation, alert_text, content_fingerprint, evaluate_issue, issue_prose
 from src.models import BriefingItem
+from src.newsletter import build_issue, write_artifacts
 from src.rank import score_article, select_items
 from src.slack import post_to_slack, render_briefing, slack_payload
 from src.state import (
+    load_issues,
     load_last_run,
     load_recent,
     load_seen,
@@ -18,16 +22,52 @@ from src.state import (
     prune_old,
     recent_items,
     remember_briefing,
+    remember_issue,
     save_last_run,
     save_seen,
 )
-from src.summarize import AuthError, compose_briefing, theme_lede, write_copies
+from src.summarize import AuthError, SchemaError, compose_briefing, theme_lede, write_copies
 
 
 class BriefingError(Exception):
     def __init__(self, message: str, text: str = ""):
         super().__init__(message)
         self.text = text
+
+
+def _redact(text: str, secrets: list) -> str:
+    redacted = text or ""
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
+
+
+def _runtime_secrets(*values) -> list:
+    found = []
+    for value in list(values) + [
+        os.environ.get("BUTTONDOWN_API_KEY"),
+        os.environ.get("SITE_GITHUB_TOKEN"),
+        os.environ.get("SLACK_WEBHOOK_URL"),
+        os.environ.get("TOGETHER_API_KEY"),
+        os.environ.get("EXA_API_KEY"),
+    ]:
+        if value and value not in found:
+            found.append(value)
+    return found
+
+
+def _default_site(issue):
+    from src.newsletter import archive_path, render_mdx
+    from src.site_publish import publish_mdx
+
+    return publish_mdx(render_mdx(issue), path=archive_path(issue))
+
+
+def _default_email(issue):
+    from src.buttondown import send_issue
+
+    return send_issue(issue)
 
 
 def window_start(
@@ -93,6 +133,11 @@ def run_briefing(
     searcher=None,
     reader=None,
     composer=None,
+    url_checker=None,
+    artifact_dir=None,
+    site_publisher=None,
+    email_publisher=None,
+    published_path=None,
 ) -> str:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
@@ -102,6 +147,18 @@ def run_briefing(
     seen_path = Path(seen_path) if seen_path else Path("state/seen_articles.json")
     last_run_path = Path(last_run_path) if last_run_path else Path("state/last_briefing.json")
     recent_path = Path(recent_path) if recent_path else seen_path.parent / "recent_briefings.json"
+    published_path = Path(published_path) if published_path else seen_path.parent / "published_issues.json"
+    site_publisher = site_publisher or _default_site
+    email_publisher = email_publisher or _default_email
+    secrets = _runtime_secrets(api_key, webhook_url)
+
+    def stop_for_schema(exc: SchemaError):
+        violation = Violation("schema", str(exc))
+        notice = alert_text([violation])
+        print(_redact(notice, secrets), file=sys.stderr)
+        if not dry_run and webhook_url:
+            poster(slack_payload(notice), webhook_url)
+        raise BriefingError(f"Blocked by guardrails: schema: {exc}") from exc
 
     if since_override is not None:
         since = since_override
@@ -160,6 +217,8 @@ def run_briefing(
             raise BriefingError(
                 "Together API rejected the key or model name. Not posting."
             ) from exc
+        except SchemaError as exc:
+            stop_for_schema(exc)
         selected = [article for article, _, _ in pairs]
         items = [
             BriefingItem(
@@ -192,6 +251,8 @@ def run_briefing(
                 raise BriefingError(
                     "Together API rejected the key or model name. Not posting."
                 ) from exc
+            except SchemaError as exc:
+                stop_for_schema(exc)
             items = [
                 BriefingItem(
                     what_happened=what,
@@ -222,16 +283,75 @@ def run_briefing(
         print(coverage_report(expect_headlines, unique, selected), file=sys.stderr)
 
     text = render_briefing(now, since, items, lede=lede)
+    published = load_issues(published_path)
+    issue = build_issue(now, lede, items, selected) if items else None
+    violations = []
+    if issue:
+        violations = evaluate_issue(
+            title=issue.title,
+            lede=issue.lede,
+            items=issue.items,
+            idempotency_key=issue.idempotency_key,
+            published=published,
+            url_checker=url_checker,
+        )
+    if artifact_dir and issue:
+        write_artifacts(artifact_dir, issue, violations)
+    if violations:
+        for violation in violations:
+            print(f"Guardrail {violation.code}: {violation.detail}", file=sys.stderr)
+
     if dry_run:
-        print("Dry run: not posting to Slack.", file=sys.stderr)
+        print("Dry run: not posting to Slack, email, or the site.", file=sys.stderr)
         return text
 
     if not api_key:
         raise BriefingError("TOGETHER_API_KEY is not set.", text=text)
+    if violations:
+        notice = alert_text(violations)
+        if webhook_url:
+            poster(slack_payload(notice), webhook_url)
+        raise BriefingError(
+            "Blocked by guardrails: " + "; ".join(f"{item.code}: {item.detail}" for item in violations),
+            text=text,
+        )
     if not webhook_url:
         raise BriefingError("SLACK_WEBHOOK_URL is not set.", text=text)
 
-    poster(slack_payload(text), webhook_url)
+    try:
+        if issue:
+            site_publisher(issue)
+            email_publisher(issue)
+            # Consume the window key before Slack. A later Slack failure must not
+            # send a second email or commit a second file on retry.
+            remember_issue(
+                {
+                    "idempotency_key": issue.idempotency_key,
+                    "date": issue.date,
+                    "title": issue.title,
+                    "urls": [item.url for item in issue.items],
+                    "fingerprint": content_fingerprint(
+                        issue.items,
+                        issue_prose(issue.title, issue.lede, issue.items),
+                    ),
+                    "published_at": now.isoformat(),
+                },
+                published_path,
+            )
+        poster(slack_payload(text), webhook_url)
+    except Exception as exc:
+        message = _redact(str(exc), secrets)
+        print(f"Delivery failed: {message}", file=sys.stderr)
+        if webhook_url:
+            try:
+                poster(
+                    slack_payload(f"*AI news was not published.*\nDelivery failed: {message}\n"),
+                    webhook_url,
+                )
+            except Exception:
+                print("Could not post the delivery alert.", file=sys.stderr)
+        raise BriefingError(message, text=text) from exc
+
     updated = seen
     for article in fresh:
         updated = mark_seen(updated, canonical_url(article.url))

@@ -2,8 +2,9 @@ import re
 
 from src.dedupe import model_signature, same_event
 
-# Points come from the headline only. Excerpts mention product names inside
-# customer stories and would otherwise promote those posts.
+# Points come from the headline only. A customer story, a market blurb, or a
+# vendor-internal note is not a general news item, and an excerpt that names a
+# product inside one of those posts must not promote it.
 
 _MODEL = re.compile(
     r"\b(gpt-\d|gpt \d|claude \d|gemini \d|llama \d|mistral large|deepseek-?\d)\b",
@@ -139,9 +140,20 @@ def select_items(
     return chosen
 
 
+# "Together AI releases a model" can be public news. Revenue, customers, and
+# internal notes are not, and neither is a "for Together" angle.
+_TOGETHER_ANGLE = re.compile(
+    r"\bfor together\b|"
+    r"\btogether(?:\s+ai)?(?:'s|’s)?\s+(?:customers?|revenue|arr|mrr|internals?|confidential)\b",
+    re.I,
+)
+
+
 def hard_noise(article) -> bool:
     """Customer stories, market blurbs, release candidates, opinion, office news."""
     title = article.title or ""
+    if _TOGETHER_ANGLE.search(title):
+        return True
     # Lab blogs title customer explainers "How Acme is building...".
     if re.match(r"^how\b", title.strip(), re.I):
         return True

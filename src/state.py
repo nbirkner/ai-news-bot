@@ -103,6 +103,35 @@ def remember_briefing(when: datetime, articles: list, state_file: Path, *, keep:
     save_recent(rows, state_file, keep=keep)
 
 
+def load_issues(state_file: Path = Path("state/published_issues.json")) -> list:
+    """Published newsletter issues, oldest first. Missing or corrupt files yield []."""
+    if not state_file.exists():
+        return []
+    try:
+        data = json.loads(state_file.read_text())
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        rows = data.get("issues") or []
+    elif isinstance(data, list):
+        rows = data
+    else:
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def save_issues(issues: list, state_file: Path = Path("state/published_issues.json"), *, keep: int = 20) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"issues": list(issues)[-keep:]}
+    state_file.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def remember_issue(record: dict, state_file: Path, *, keep: int = 20) -> None:
+    rows = load_issues(state_file)
+    rows.append(record)
+    save_issues(rows, state_file, keep=keep)
+
+
 def recent_items(briefings: list) -> list:
     items = []
     for briefing in briefings:
