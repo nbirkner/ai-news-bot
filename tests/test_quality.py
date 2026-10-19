@@ -527,6 +527,7 @@ def test_config_and_workflow_name_the_new_sources():
 
 
 def test_discovery_main_prints_shortlist_without_posting(monkeypatch, capsys):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
     article = _load_window()[3]
     from src.discover import DiscoveryResult
     import scripts.discovery_dry_run as discovery
