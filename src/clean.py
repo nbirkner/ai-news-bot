@@ -26,7 +26,8 @@ _COMMON_WORDS = {
     "with", "from", "when", "what", "how", "why", "who", "for", "and",
 }
 _QUOTE_RE = re.compile(r"[\"“]([^\"”]{3,})[\"”]")
-_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# Longer dotted numbers (0.32.0, 4.1) win over a single decimal group.
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)+|\d[\d,]*")
 
 
 def collapse_ws(text: str) -> str:
@@ -102,6 +103,20 @@ def numbers(text: str) -> set:
     return set(_NUMBER_RE.findall(text or ""))
 
 
+def number_in_source(num: str, source: str) -> bool:
+    """True when the same numeric token appears in the source, commas ignored."""
+    compact = (num or "").replace(",", "")
+    if not compact:
+        return True
+    haystack = (source or "").replace(",", "")
+    # A sentence period may follow a number. Another digit, or a decimal
+    # continuation, means this is a different figure.
+    return re.search(
+        rf"(?<![\d.]){re.escape(compact)}(?!\d)(?!\.\d)",
+        haystack,
+    ) is not None
+
+
 def _looks_like_name(entity: str, line: str) -> bool:
     if re.search(r"[A-Z]", entity[1:]) or (entity.isupper() and len(entity) >= 2):
         return True
@@ -128,24 +143,24 @@ def novel_entities(line: str, source: str) -> list:
 
 
 def line_is_grounded(line: str, source: str, *, analysis: bool) -> bool:
-    """Reject invented numbers, quotes, names, hype, and (for facts) unsupported words."""
+    """Keep a line when its numbers, quotes, and names all appear in the source.
+
+    A paraphrase may use different verbs than the headline. That is allowed.
+    Invented figures, quotations, proper names, and hype words are not.
+    `analysis` remains in the signature so callers can mark interpretation.
+    """
+    del analysis  # interpretation may rephrase; it still cannot add facts
     if not line or HYPE_RE.search(line):
         return False
-    if numbers(line) - numbers(source):
-        return False
+    for num in numbers(line):
+        if not number_in_source(num, source):
+            return False
     source_l = (source or "").lower()
     for quote in _QUOTE_RE.findall(line):
         if quote.lower() not in source_l:
             return False
     if novel_entities(line, source):
         return False
-    if not analysis:
-        words = [word for word in tokens(line) if len(word) > 4]
-        if words:
-            source_tokens = set(tokens(source))
-            overlap = sum(1 for word in words if word in source_tokens) / len(words)
-            if overlap < 0.55:
-                return False
     return True
 
 

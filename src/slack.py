@@ -21,7 +21,7 @@ def slack_link(url: str, label: str) -> str:
     return f"<{safe_url}|{safe_label}>"
 
 
-def render_briefing(now: datetime, since: datetime, items: list) -> str:
+def render_briefing(now: datetime, since: datetime, items: list, lede: str = "") -> str:
     header = f"*AI briefing, {_when(now)}*"
     if not items:
         return (
@@ -29,11 +29,19 @@ def render_briefing(now: datetime, since: datetime, items: list) -> str:
             f"Quiet since {_when(since)}. No model release, infra change, or "
             "policy news worth flagging from the sources we watch.\n"
         )
-    lines = [header, f"Since {_when(since)}.", ""]
+    # A lede replaces the "Since ..." line. An empty lede keeps the old layout.
+    if lede:
+        lines = [header, slack_escape(lede), ""]
+    else:
+        lines = [header, f"Since {_when(since)}.", ""]
     for item in items:
         lines.append(f"*{slack_escape(item.what_happened)}*")
         lines.append(slack_escape(item.why_it_matters))
-        lines.append(slack_link(item.url, item.source_name))
+        links = [(item.url, item.source_name)]
+        for extra in getattr(item, "also", ()) or ():
+            if isinstance(extra, (tuple, list)) and len(extra) == 2:
+                links.append((extra[0], extra[1]))
+        lines.append(" | ".join(slack_link(url, label) for url, label in links))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

@@ -137,3 +137,109 @@ def select_items(
         if len(chosen) >= limit:
             break
     return chosen
+
+
+def hard_noise(article) -> bool:
+    """Customer stories, market blurbs, release candidates, opinion, office news."""
+    title = article.title or ""
+    # Lab blogs title customer explainers "How Acme is building...".
+    if re.match(r"^how\b", title.strip(), re.I):
+        return True
+    if _CUSTOMER.search(title) or _MARKET.search(title) or _PRERELEASE.search(title):
+        return True
+    if _OPINION.search(title):
+        return True
+    if _OFFICE.search(title) and not _STRONG_POLICY.search(title) and not _DEAL.search(title):
+        return True
+    return False
+
+
+_BUCKET_ORDER = ("model", "agents", "infra", "policy", "money", "other")
+
+
+def bucket_for(article) -> str:
+    """Coarse topic, so a low keyword score cannot crowd out a whole theme."""
+    title = article.title or ""
+    if re.search(
+        r"deepseek|qwen|kimi|moonshot|gpt-\d|claude \d|gemini \d|llama \d|"
+        r"open[- ]weights?|foundation model",
+        title,
+        re.I,
+    ):
+        return "model"
+    if _DEAL.search(title) or re.search(r"\braises?\b|\$\s?\d", title, re.I):
+        return "money"
+    if (
+        _STRONG_POLICY.search(title)
+        or _MILD_POLICY.search(title)
+        or re.search(r"\bbill\b|lawmakers|workforce|legislation|public benefit|\bfund\b", title, re.I)
+    ):
+        return "policy"
+    if _INFRA.search(title) or re.search(
+        r"data center|datacenter|power|grid|chip|nscale|blackwell",
+        title,
+        re.I,
+    ):
+        return "infra"
+    if _AGENTS.search(title) or re.search(r"\bagents?\b", title, re.I):
+        return "agents"
+    if _MODEL.search(title):
+        return "model"
+    if article.source_kind == "release":
+        return "infra"
+    return "other"
+
+
+def shortlist_for_reading(articles: list, *, limit: int = 15) -> list:
+    """Pick a diverse set for full-text reading. The model ranks this set.
+
+    Keyword score is not a cutoff. Hard noise is dropped. Within a topic,
+    newer items come first so a quiet headline is not buried under patch notes.
+    """
+    pool = [article for article in articles if not hard_noise(article)]
+    buckets = {name: [] for name in _BUCKET_ORDER}
+    chosen = []
+    seen = set()
+
+    def add(article) -> None:
+        key = (article.source_name, article.title)
+        if key in seen or len(chosen) >= limit:
+            return
+        seen.add(key)
+        chosen.append(article)
+
+    # A source with one or two items in the window is usually the reason that
+    # feed exists. Keep those even when a busier feed published later.
+    counts = {}
+    for article in pool:
+        counts[article.source_name] = counts.get(article.source_name, 0) + 1
+    sparse = sorted(
+        (article for article in pool if counts[article.source_name] <= 2),
+        key=lambda article: (article.source_priority, -article.published_at.timestamp()),
+    )
+    for article in sparse:
+        add(article)
+        if len(chosen) >= min(limit, 8):
+            break
+    ordered = sorted(pool, key=lambda article: article.published_at, reverse=True)
+    for article in ordered:
+        buckets[bucket_for(article)].append(article)
+    while len(chosen) < limit:
+        progressed = False
+        for name in _BUCKET_ORDER:
+            # Skip items the sparse pass already kept, and take the next new one.
+            # Stopping on an all-seen pass would drop later stories in that topic.
+            while buckets[name]:
+                article = buckets[name].pop(0)
+                key = (article.source_name, article.title)
+                if key in seen:
+                    continue
+                seen.add(key)
+                chosen.append(article)
+                progressed = True
+                break
+            if len(chosen) >= limit:
+                break
+        if not progressed:
+            break
+    return chosen

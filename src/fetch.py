@@ -20,7 +20,8 @@ HEADERS = {
 AI_TERMS = re.compile(
     r"\b(ai|a\.i\.|artificial intelligence|openai|anthropic|deepmind|gemini|"
     r"chatgpt|gpt-\d|claude|llms?|machine learning|nvidia|gpu|mistral|"
-    r"vllm|sglang)\b",
+    r"vllm|sglang|deepseek|qwen|kimi|moonshot|tenstorrent|huggingface|"
+    r"data centers?|datacenters?|chips?|semiconductor|inference)\b",
     re.I,
 )
 SKIP_REUTERS_PATH = re.compile(
@@ -300,6 +301,68 @@ _HTML_PARSERS = {
 }
 
 
+_HF_TEXT = {
+    "text-generation",
+    "image-text-to-text",
+    "any-to-any",
+    "text2text-generation",
+}
+
+
+def _hf_text_model(row: dict) -> bool:
+    if (row.get("pipeline_tag") or "") in _HF_TEXT:
+        return True
+    tags = " ".join(row.get("tags") or []).lower()
+    return "text-generation" in tags or "image-text-to-text" in tags
+
+
+def parse_huggingface(source: dict, payload) -> list:
+    """Turn a Hugging Face /api/models payload into articles. Dates are createdAt."""
+    if isinstance(payload, dict):
+        payload = payload.get("models") or payload.get("items") or []
+    if not isinstance(payload, list):
+        return []
+    articles = []
+    seen = set()
+    trending = bool(source.get("trending"))
+    for row in payload:
+        if not isinstance(row, dict) or row.get("private"):
+            continue
+        model_id = (row.get("id") or row.get("modelId") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        if trending and not _hf_text_model(row):
+            continue
+        published = parse_iso(row.get("createdAt") or "")
+        if published is None:
+            continue
+        seen.add(model_id)
+        name = model_id.split("/", 1)[-1]
+        pipeline = row.get("pipeline_tag") or "model"
+        preview = f"{name} on Hugging Face. Pipeline: {pipeline}. Created {row.get('createdAt')}."
+        articles.append(_article(
+            source,
+            f"https://huggingface.co/{model_id}",
+            name,
+            published,
+            preview,
+        ))
+    return articles
+
+
+def fetch_huggingface(source: dict) -> list:
+    params = {
+        "limit": int(source.get("max_results", 8)),
+        "sort": source.get("sort") or "createdAt",
+        "direction": -1,
+    }
+    author = (source.get("author") or "").strip()
+    if author:
+        params["author"] = author
+    response = http_get(source["url"], params=params)
+    return parse_huggingface(source, response.json())
+
+
 def fetch_html(source: dict) -> list:
     parser = _HTML_PARSERS.get(source.get("parser", ""))
     if parser is None:
@@ -313,6 +376,7 @@ _FETCHERS = {
     "reuters": fetch_reuters,
     "arxiv": fetch_arxiv,
     "html": fetch_html,
+    "huggingface": fetch_huggingface,
 }
 
 

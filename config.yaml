@@ -4,13 +4,23 @@
 lookback_fallback_hours: 80
 max_lookback_hours: 168
 state_retention_days: 21
-max_items: 6
+# Ask the model for 4 to 7 items. Fewer is correct when the window is thin.
+max_items: 7
 material_score: 6
 paper_min_score: 9
 max_per_source: 8
 max_per_source_in_briefing: 2
 max_per_signature: 1
-together_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+# How many deduped candidates get full text before the model ranks them.
+read_candidates: 15
+read_full_text: true
+llm_rank: true
+theme_lede: true
+# Hard cap on Exa /search and /contents calls per run. EXA_MAX_CALLS overrides this.
+exa_max_calls: 30
+# Strongest general Together instruct model with structured output as of Oct 2026.
+# Override with TOGETHER_MODEL. Llama 3.3 70B Turbo remains a cheaper fallback.
+together_model: "zai-org/GLM-5.3"
 
 sources:
   - name: OpenAI
@@ -88,6 +98,76 @@ sources:
     domain: theverge.com
     kind: news
     priority: 3
+  - name: Politico
+    url: "https://rss.politico.com/technology.xml"
+    type: rss
+    domain: politico.com
+    kind: news
+    priority: 2
+    require_ai: true
+  - name: CNBC
+    url: "https://www.cnbc.com/id/19854910/device/rss/rss.html"
+    type: rss
+    domain: cnbc.com
+    kind: news
+    priority: 2
+    require_ai: true
+  - name: TechCrunch
+    url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+    type: rss
+    domain: techcrunch.com
+    kind: news
+    priority: 2
+  - name: TechCrunch Security
+    url: "https://techcrunch.com/category/security/feed/"
+    type: rss
+    domain: techcrunch.com
+    kind: news
+    priority: 2
+    require_ai: true
+  - name: Fortune
+    url: "https://fortune.com/feed/fortune-feeds/?id=3230629"
+    type: rss
+    domain: fortune.com
+    kind: news
+    priority: 2
+    require_ai: true
+  - name: DeepSeek
+    url: "https://huggingface.co/api/models"
+    type: huggingface
+    author: deepseek-ai
+    domain: huggingface.co
+    kind: lab
+    priority: 1
+    sort: createdAt
+    max_results: 5
+  - name: Qwen
+    url: "https://huggingface.co/api/models"
+    type: huggingface
+    author: Qwen
+    domain: huggingface.co
+    kind: lab
+    priority: 1
+    sort: createdAt
+    max_results: 5
+  - name: Moonshot
+    url: "https://huggingface.co/api/models"
+    type: huggingface
+    author: moonshotai
+    domain: huggingface.co
+    kind: lab
+    priority: 1
+    sort: createdAt
+    max_results: 5
+  - name: Hugging Face trending
+    url: "https://huggingface.co/api/models"
+    type: huggingface
+    trending: true
+    domain: huggingface.co
+    kind: release
+    priority: 2
+    sort: trendingScore
+    max_results: 8
   - name: arXiv
     url: "https://export.arxiv.org/api/query"
     type: arxiv

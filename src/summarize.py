@@ -83,7 +83,16 @@ def topic_for(article: Article) -> str:
 
 
 def _source_text(article: Article) -> str:
-    return f"{article.title}\n{article.content_preview or ''}"
+    parts = [article.title or ""]
+    details = getattr(article, "details", "") or ""
+    full_text = getattr(article, "full_text", "") or ""
+    if details:
+        parts.append(details)
+    if full_text:
+        parts.append(full_text)
+    if article.content_preview:
+        parts.append(article.content_preview)
+    return "\n".join(parts)
 
 
 def extractive_lines(article: Article) -> tuple:
@@ -113,27 +122,40 @@ def extractive_lines(article: Article) -> tuple:
 
 
 def _call_together(prompt: str, api_key: str, model: str) -> str:
-    response = requests.post(
-        TOGETHER_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 900,
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=60,
-    )
+    def send(payload: dict):
+        return requests.post(
+            TOGETHER_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=90,
+        )
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2200,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        # Instruct path. Reasoning models otherwise spend the budget on a trace.
+        "reasoning": {"enabled": False},
+    }
+    response = send(payload)
+    if response.status_code == 400 and "reasoning" in (response.text or "").lower():
+        payload.pop("reasoning", None)
+        response = send(payload)
     if response.status_code in (401, 403):
         raise AuthError(response.text[:300])
     if response.status_code == 400 and "model" in response.text.lower():
         raise AuthError(response.text[:300])
     response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"].strip()
+    message = response.json()["choices"][0]["message"]
+    content = (message.get("content") or "").strip()
+    if not content:
+        raise ValueError("Together returned an empty content field")
+    return content
 
 
 def _parse_json_object(text: str) -> dict | None:
@@ -151,24 +173,29 @@ def _parse_json_object(text: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _item_payload(article: Article, index: int) -> dict:
+    text = getattr(article, "full_text", "") or article.content_preview or ""
+    return {
+        "index": index,
+        "source": article.source_name,
+        "title": article.title,
+        "url": article.url,
+        "published": article.published_at.isoformat(),
+        "details": getattr(article, "details", "") or "",
+        "text": text[:4000],
+    }
+
+
 def _prompt(articles: list) -> str:
-    items = []
-    for index, article in enumerate(articles):
-        items.append(
-            {
-                "index": index,
-                "source": article.source_name,
-                "title": article.title,
-                "excerpt": (article.content_preview or "")[:500],
-            }
-        )
+    items = [_item_payload(article, index) for index, article in enumerate(articles)]
     return f"""You write lines for a Slack briefing read by people who build AI products and infrastructure.
 
 Rules:
-- Use only the title and excerpt. Do not add facts, numbers, quotes, or names that are not in that text.
-- what_happened: one plain sentence on what the source says happened. If the excerpt is empty or useless, restate the title and stop.
+- Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
+- what_happened: one plain sentence on what the source says happened. Keep concrete details that are in the text: prices, benchmark numbers, dates, and availability. If the text says a figure is company-reported or unaudited, keep that caveat.
 - why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
+- Plain, warm tone.
 - Keep each sentence under 220 characters.
 - Return JSON only.
 
@@ -181,8 +208,7 @@ Return:
 
 def _accept(line: str, article: Article, *, analysis: bool, fallback: str) -> str:
     cleaned = clean_line(line)
-    if is_thin_preview(article.content_preview, article.title) and not analysis:
-        return fallback
+    # Thin excerpts used to force the bare headline. Check the full source instead.
     if line_is_grounded(cleaned, _source_text(article), analysis=analysis):
         return cleaned
     return fallback
@@ -225,3 +251,133 @@ def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth
         why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=fallback_why)
         copies.append((what, why))
     return copies
+
+
+def theme_lede(articles: list) -> str:
+    """One sentence from themes that are actually in the titles. No new names."""
+    blob = " ".join(article.title or "" for article in articles).lower()
+    themes = []
+    if re.search(r"model|gpt-|claude|gemini|deepseek|qwen|kimi|llama|weights", blob):
+        themes.append("new models")
+    if re.search(r"agent", blob):
+        themes.append("agent tools")
+    if re.search(r"chip|gpu|inference|data center|power|grid", blob):
+        themes.append("infrastructure")
+    if re.search(r"bill|regulat|lawsuit|policy|safety|workforce", blob):
+        themes.append("policy")
+    if re.search(r"raise|funding|billion|acqui", blob):
+        themes.append("funding")
+    if not themes:
+        return "A handful of developments for people building and running AI systems."
+    if len(themes) == 1:
+        body = themes[0]
+    else:
+        body = ", ".join(themes[:-1]) + " and " + themes[-1]
+    return f"For people building and running AI systems, this window is mostly about {body}."
+
+
+def _rank_prompt(articles: list, recent: list, limit: int) -> str:
+    items = [_item_payload(article, index) for index, article in enumerate(articles)]
+    already = [
+        {"title": item.get("title") or "", "url": item.get("url") or ""}
+        for item in (recent or [])
+        if item.get("title")
+    ]
+    return f"""You rank and write a Slack briefing for people who build AI products and infrastructure.
+
+Compare the candidates against each other. Order is not a ranking.
+Choose the items that would change what a builder ships, what it costs to run, or what they have to comply with.
+Prefer a material story over a routine patch note. Include a release note only when it changes serving in a way that matters this week.
+Skip stories that are already in the recent briefings unless the new piece is a real development.
+Return between 4 and {limit} items when that many are genuinely material. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
+
+For each chosen item:
+- what_happened: one plain sentence. Keep prices, benchmark numbers, dates, and availability when they are in that item's text. If the text says a figure is company-reported or unaudited, keep that caveat.
+- why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
+Use only names, numbers, and quotes that appear in that item's text.
+
+lede: one plain sentence that ties the chosen themes together. No new facts. No hype. No em dashes.
+Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
+Keep each sentence under 240 characters.
+Return JSON only.
+
+Already briefed:
+{json.dumps(already, ensure_ascii=True)}
+
+Candidates:
+{json.dumps(items, ensure_ascii=True)}
+
+Return:
+{{"lede": "...", "items": [{{"index": 0, "what_happened": "...", "why_it_matters": "..."}}]}}"""
+
+
+def _fallback_pairs(articles: list, limit: int) -> tuple:
+    chosen = list(articles)[:limit]
+    pairs = []
+    for article in chosen:
+        what, why = extractive_lines(article)
+        pairs.append((article, what, why))
+    lede = theme_lede(chosen) if chosen else ""
+    return lede, pairs
+
+
+def compose_briefing(
+    articles: list,
+    api_key: str | None,
+    model: str,
+    *,
+    strict_auth: bool,
+    recent=None,
+    limit: int = 7,
+) -> tuple:
+    """Rank the shortlist and write the lede plus items. Returns (lede, pairs).
+
+    pairs is a list of (article, what_happened, why_it_matters) in rank order.
+    """
+    if not articles:
+        return "", []
+    if not api_key:
+        return _fallback_pairs(articles, limit)
+    try:
+        raw = _call_together(_rank_prompt(articles, recent or [], limit), api_key, model)
+    except AuthError:
+        if strict_auth:
+            raise
+        print("Warning: Together auth failed. Using the shortlist order.", file=sys.stderr)
+        return _fallback_pairs(articles, limit)
+    except Exception as exc:
+        print(f"Warning: Together ranking failed ({exc}). Using the shortlist order.", file=sys.stderr)
+        return _fallback_pairs(articles, limit)
+
+    payload = _parse_json_object(raw)
+    rows = payload.get("items") if payload else None
+    if not isinstance(rows, list):
+        print("Warning: Together returned no ranking. Using the shortlist order.", file=sys.stderr)
+        return _fallback_pairs(articles, limit)
+
+    pairs = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("index"), int):
+            continue
+        index = row["index"]
+        if index in seen or index < 0 or index >= len(articles):
+            continue
+        seen.add(index)
+        article = articles[index]
+        what_fb, why_fb = extractive_lines(article)
+        what = _accept(str(row.get("what_happened") or ""), article, analysis=False, fallback=what_fb)
+        why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=why_fb)
+        pairs.append((article, what, why))
+        if len(pairs) >= limit:
+            break
+
+    if not pairs:
+        # The model looked and found nothing worth posting.
+        return "", []
+
+    combined = "\n".join(_source_text(article) for article, _, _ in pairs)
+    lede = clean_line(str(payload.get("lede") or ""), limit=240)
+    if not line_is_grounded(lede, combined, analysis=True):
+        lede = theme_lede([article for article, _, _ in pairs])
+    return lede, pairs

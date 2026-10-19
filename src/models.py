@@ -12,6 +12,8 @@ class Article:
     content_preview: str = ""
     source_kind: str = "news"  # lab, news, release, paper
     source_priority: int = 5  # lower wins when two sources cover the same story
+    full_text: str = ""
+    details: str = ""
 
 
 @dataclass
@@ -20,6 +22,7 @@ class BriefingItem:
     why_it_matters: str
     url: str
     source_name: str
+    also: tuple = ()  # extra (url, label) citations
 
 
 @dataclass

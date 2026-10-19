@@ -23,6 +23,22 @@ def test_fact_line_must_overlap_the_source():
     )
 
 
+def test_version_sentence_is_kept_when_the_number_is_in_the_source():
+    # A dry run reduced "vLLM released version 0.32.0" to the bare headline.
+    # The version is in the source, so the paraphrase stays.
+    source = "vLLM v0.32.0\nThis release adds new features and parsers."
+    assert line_is_grounded(
+        "vLLM released version 0.32.0.",
+        source,
+        analysis=False,
+    )
+    assert not line_is_grounded(
+        "vLLM released version 0.32.1.",
+        source,
+        analysis=False,
+    )
+
+
 def test_analysis_line_cannot_add_numbers_quotes_or_names():
     assert line_is_grounded(
         "A lawsuit like this changes the constraints on shipping a consumer assistant.",

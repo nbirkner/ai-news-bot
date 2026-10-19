@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from src.models import Article
-from src.summarize import extractive_lines
+from src.summarize import _accept, _source_text, extractive_lines
 
 
 def _article(title, preview, kind="lab"):
@@ -26,6 +26,41 @@ def test_extractive_uses_the_title_when_the_lede_is_first_person():
     assert what.startswith("Gemini 4 Argon")
     assert "We're" not in what
     assert "model release" in why.lower()
+
+
+def test_accept_keeps_a_version_sentence_when_the_preview_is_only_the_title():
+    article = _article("vLLM v0.32.0", "vLLM v0.32.0", kind="release")
+    article.full_text = "vLLM v0.32.0\nThis release adds new features and parsers."
+    article.url = "https://github.com/vllm-project/vllm/releases/tag/v0.32.0"
+    article.source_name = "vLLM"
+    kept = _accept(
+        "vLLM released version 0.32.0",
+        article,
+        analysis=False,
+        fallback=article.title,
+    )
+    assert kept == "vLLM released version 0.32.0."
+
+
+def test_grounding_source_includes_full_text():
+    article = _article("DeepSeek-V4.1-Flash-1017", "DeepSeek-V4.1-Flash-1017")
+    article.full_text = (
+        "DeepSeek released DeepSeek-V4.1-Flash-1017 on 2026-10-17. "
+        "The weights are on Hugging Face. Context length is 128000."
+    )
+    source = _source_text(article)
+    assert "128000" in source
+    from src.clean import line_is_grounded
+    assert line_is_grounded(
+        "DeepSeek-V4.1-Flash-1017 has a context length of 128000.",
+        source,
+        analysis=False,
+    )
+    assert not line_is_grounded(
+        "DeepSeek-V4.1-Flash-1017 has a context length of 128000.",
+        article.content_preview,
+        analysis=False,
+    )
 
 
 def test_extractive_uses_a_source_why_line_when_it_is_present():

@@ -11,6 +11,14 @@ on:
         description: "Print the briefing and do not post to Slack"
         type: boolean
         default: false
+      since:
+        description: "Dry run only. Window start as ISO-8601, or a span like 80h (LOOKBACK)"
+        type: string
+        default: ""
+      expect_file:
+        description: "Dry run only. Repo path of expected headlines, one per line"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -28,6 +36,15 @@ jobs:
           # Uses the built-in token. If a repo still has GH_PAT, that token is used instead.
           token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
 
+      - name: Restore briefing state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          # Unique key so each real post can save. restore-keys picks up the previous post.
+          key: briefing-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            briefing-state-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -39,18 +56,23 @@ jobs:
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          # Default 30. Set the EXA_MAX_CALLS repo variable to override.
+          EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '30' }}
+          TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-        run: python main_briefing.py
+          LOOKBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.since || '' }}
+          EXPECT_FILE: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.expect_file || '' }}
+        run: |
+          args=()
+          if [ -n "$EXPECT_FILE" ]; then
+            args+=(--expect "$EXPECT_FILE")
+          fi
+          python main_briefing.py "${args[@]}"
 
       - name: Save briefing state
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/seen_articles.json state/last_briefing.json
-          if git diff --staged --quiet; then
-            echo "No state changes."
-          else
-            git commit -m "chore: update briefing state [skip ci]"
-            git push
-          fi
+        if: success() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false))
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: briefing-state-${{ github.run_id }}-${{ github.run_attempt }}
