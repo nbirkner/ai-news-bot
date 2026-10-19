@@ -18,8 +18,8 @@ llm_rank: true
 theme_lede: true
 # Hard cap on Exa /search and /contents calls per run. EXA_MAX_CALLS overrides this.
 exa_max_calls: 30
-# Strongest general Together instruct model with structured output as of Oct 2026.
-# Override with TOGETHER_MODEL. Llama 3.3 70B Turbo remains a cheaper fallback.
+# Inference model only. The briefing text is a public issue, not a company briefing.
+# TOGETHER_API_KEY must be a personal key. Override the model with TOGETHER_MODEL.
 together_model: "zai-org/GLM-5.3"
 
 sources:

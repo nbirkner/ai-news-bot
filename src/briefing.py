@@ -24,6 +24,14 @@ from src.state import (
 from src.summarize import AuthError, compose_briefing, theme_lede, write_copies
 
 
+def _story_fields(row):
+    """(article, headline, body, why) or the older (article, headline, why)."""
+    article = row[0]
+    if len(row) >= 4:
+        return article, row[1], row[2], row[3]
+    return article, row[1], "", row[2]
+
+
 class BriefingError(Exception):
     def __init__(self, message: str, text: str = ""):
         super().__init__(message)
@@ -160,16 +168,17 @@ def run_briefing(
             raise BriefingError(
                 "Together API rejected the key or model name. Not posting."
             ) from exc
-        selected = [article for article, _, _ in pairs]
-        items = [
-            BriefingItem(
-                what_happened=what,
+        selected = [row[0] for row in pairs]
+        items = []
+        for row in pairs:
+            article, headline, body, why = _story_fields(row)
+            items.append(BriefingItem(
+                what_happened=headline,
                 why_it_matters=why,
                 url=article.url,
                 source_name=article.source_name,
-            )
-            for article, what, why in pairs
-        ]
+                body=body,
+            ))
     else:
         selected = select_items(
             unique,

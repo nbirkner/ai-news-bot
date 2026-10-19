@@ -36,6 +36,8 @@ def render_briefing(now: datetime, since: datetime, items: list, lede: str = "")
         lines = [header, f"Since {_when(since)}.", ""]
     for item in items:
         lines.append(f"*{slack_escape(item.what_happened)}*")
+        if getattr(item, "body", ""):
+            lines.append(slack_escape(item.body))
         lines.append(slack_escape(item.why_it_matters))
         links = [(item.url, item.source_name)]
         for extra in getattr(item, "also", ()) or ():

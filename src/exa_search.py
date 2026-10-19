@@ -81,6 +81,8 @@ class ExaBudget:
     def __init__(self, cap: int):
         self.cap = max(0, int(cap))
         self.used = 0
+        self.search_calls = 0
+        self.content_pages = 0
         self.stop_reason = ""
 
     def acquire(self) -> bool:
@@ -235,6 +237,7 @@ def search_queries(
             break
         if not budget.acquire():
             break
+        budget.search_calls += 1
         payload = {
             "query": query,
             "type": "auto",
@@ -275,8 +278,10 @@ def fetch_contents(api_key: str, urls: list, budget: ExaBudget, *, post=None) ->
         if cleaned and budget.stop_reason == "cap":
             print("Exa contents skipped: call cap reached.", file=sys.stderr)
         return {}
+    pages = cleaned[:15]
+    budget.content_pages += len(pages)
     payload = {
-        "urls": cleaned[:15],
+        "urls": pages,
         "text": {"maxCharacters": 8000, "verbosity": "standard"},
     }
     try:

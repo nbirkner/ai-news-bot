@@ -55,6 +55,21 @@ def clean_line(text: str, limit: int = 220) -> str:
     return text
 
 
+def split_sentences(text: str) -> list:
+    """Split prose on sentence boundaries. Decimal numbers stay intact."""
+    raw = collapse_ws((text or "").replace("\n", " "))
+    if not raw:
+        return []
+    protected = re.sub(r"(?<=\d)\.(?=\d)", "\u0001", raw)
+    parts = re.split(r"(?<=[.!?])\s+", protected)
+    sentences = []
+    for part in parts:
+        sentence = part.replace("\u0001", ".").strip()
+        if sentence:
+            sentences.append(sentence)
+    return sentences
+
+
 def first_sentence(text: str) -> str:
     text = html.unescape(text or "")
     text = text.replace("\u2014", ", ").replace("\u2013", ", ")

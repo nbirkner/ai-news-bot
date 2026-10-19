@@ -10,21 +10,23 @@ from src.clean import (
     is_thin_preview,
     line_is_grounded,
     shares_distinctive_word,
+    split_sentences,
 )
+from src.usage import record_llm_call
 from src.models import Article
 
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
 
 _WHY = {
-    "policy": "A legal or policy move changes the constraints on building and shipping AI products.",
-    "safety": "A safety or security development changes the risks teams have to plan for.",
-    "deal": "A deal can shift who has the models, the compute, or the distribution.",
-    "model": "A model release changes what products can do and what serving stacks need to run.",
-    "infra": "An inference or hardware change affects the cost and latency of running models.",
-    "agents": "An agent update changes how teams connect models to tools and longer tasks.",
-    "paper": "A research result worth a look if you train or evaluate models.",
-    "release": "A serving-stack release affects how teams deploy open models.",
-    "other": "Worth a look for teams that build or run AI systems.",
+    "policy": "For people building with AI, a legal or policy move changes the constraints on shipping a product.",
+    "safety": "For people building with AI, a safety or security development changes the risks you have to plan for.",
+    "deal": "For people building with AI, a deal can shift who has the models, the compute, or the distribution.",
+    "model": "For people building with AI, a model release changes what a product can do and what it costs to serve.",
+    "infra": "For people building with AI, an inference or hardware change affects the cost and latency of running models.",
+    "agents": "For people building with AI, an agent update changes how models connect to tools and longer tasks.",
+    "paper": "For people building with AI, this is a research result worth a look if you train or evaluate models.",
+    "release": "For people building with AI, a serving-stack release matters only when it changes how models are deployed.",
+    "other": "For people building with AI, this is worth a look if you ship or run models.",
 }
 
 _TOPICS = (
@@ -51,6 +53,10 @@ _TOPICS = (
 
 class AuthError(Exception):
     """The Together key or model name was rejected. Do not post a fallback."""
+
+
+class SchemaError(Exception):
+    """The model reply is not the issue schema. Do not publish it."""
 
 
 def _first_person(sentence: str) -> bool:
@@ -136,7 +142,7 @@ def _call_together(prompt: str, api_key: str, model: str) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 2200,
+        "max_tokens": 4500,
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
         # Instruct path. Reasoning models otherwise spend the budget on a trace.
@@ -151,10 +157,17 @@ def _call_together(prompt: str, api_key: str, model: str) -> str:
     if response.status_code == 400 and "model" in response.text.lower():
         raise AuthError(response.text[:300])
     response.raise_for_status()
-    message = response.json()["choices"][0]["message"]
+    body = response.json()
+    message = body["choices"][0]["message"]
     content = (message.get("content") or "").strip()
+    usage = body.get("usage") or {}
+    record_llm_call(
+        model,
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+    )
     if not content:
-        raise ValueError("Together returned an empty content field")
+        raise ValueError("model returned an empty content field")
     return content
 
 
@@ -188,22 +201,24 @@ def _item_payload(article: Article, index: int) -> dict:
 
 def _prompt(articles: list) -> str:
     items = [_item_payload(article, index) for index, article in enumerate(articles)]
-    return f"""You write lines for a Slack briefing read by people who build AI products and infrastructure.
+    return f"""You write a public AI news briefing for a general audience of people building with AI.
 
 Rules:
 - Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
-- what_happened: one plain sentence on what the source says happened. Keep concrete details that are in the text: prices, benchmark numbers, dates, and availability. If the text says a figure is company-reported or unaudited, keep that caveat.
-- why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
+- headline: one specific claim, not a version number alone.
+- body: 3 to 5 sentences of concrete facts from that item's text. Keep prices, benchmark numbers, dates, and availability. If the text says a figure is company-reported or unaudited, keep that caveat.
+- why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not.
+- Public information only. No private companies' internal notes, customers, or revenue, and no product pitch.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
-- Plain, warm tone.
-- Keep each sentence under 220 characters.
+- Do not write a generic line such as "it adds new features" unless the text names the features.
+- Keep each sentence under 380 characters.
 - Return JSON only.
 
 Items:
 {json.dumps(items, ensure_ascii=True)}
 
 Return:
-{{"items": [{{"index": 0, "what_happened": "...", "why_it_matters": "..."}}]}}"""
+{{"items": [{{"index": 0, "headline": "...", "body": "...", "why_it_matters": "..."}}]}}"""
 
 
 def _accept(line: str, article: Article, *, analysis: bool, fallback: str) -> str:
@@ -283,22 +298,25 @@ def _rank_prompt(articles: list, recent: list, limit: int) -> str:
         for item in (recent or [])
         if item.get("title")
     ]
-    return f"""You rank and write a Slack briefing for people who build AI products and infrastructure.
+    return f"""You rank and write one public AI news briefing for people building with AI.
 
 Compare the candidates against each other. Order is not a ranking.
-Choose the items that would change what a builder ships, what it costs to run, or what they have to comply with.
-Prefer a material story over a routine patch note. Include a release note only when it changes serving in a way that matters this week.
+Choose stories that change what someone can ship, what it costs to run a model, or what they have to comply with.
+Prefer a material story over a routine patch note. Include a release note only when the text names a concrete change that matters this week.
+Skip a note that only says new features or bug fixes.
 Skip stories that are already in the recent briefings unless the new piece is a real development.
 Return between 4 and {limit} items when that many are genuinely material. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
+Public sources only. Do not mention private customers, revenue, or internal names.
 
 For each chosen item:
-- what_happened: one plain sentence. Keep prices, benchmark numbers, dates, and availability when they are in that item's text. If the text says a figure is company-reported or unaudited, keep that caveat.
-- why_it_matters: one plain sentence on why a builder should care. Interpretation is allowed. New facts are not.
+- headline: a specific claim a reader can scan. Not a bare version number.
+- body: 3 to 5 sentences of concrete facts from that item's text only. Keep prices, dates, benchmark numbers, and availability. Keep a caveat when the text says a figure is company-reported or unaudited.
+- why_it_matters: one sentence for people building with AI. Interpretation is allowed. New facts are not.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one plain sentence that ties the chosen themes together. No new facts. No hype. No em dashes.
+lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
-Keep each sentence under 240 characters.
+Keep each sentence under 380 characters.
 Return JSON only.
 
 Already briefed:
@@ -308,7 +326,71 @@ Candidates:
 {json.dumps(items, ensure_ascii=True)}
 
 Return:
-{{"lede": "...", "items": [{{"index": 0, "what_happened": "...", "why_it_matters": "..."}}]}}"""
+{{"lede": "...", "items": [{{"index": 0, "headline": "...", "body": "...", "why_it_matters": "..."}}]}}"""
+
+
+_BOILER = re.compile(
+    r"\b(subscribe|cookie|sign up for|share this|read more|all rights reserved|"
+    r"advertisement|related articles|skip to content)\b",
+    re.I,
+)
+_THIN_RELEASE = re.compile(
+    r"\b(adds new features|it adds new|new features and|various improvements|"
+    r"bug fixes|this release includes)\b",
+    re.I,
+)
+
+
+def factual_body(article: Article) -> str:
+    """Up to five concrete sentences from the article, in source order."""
+    source = "\n".join([
+        getattr(article, "full_text", "") or "",
+        article.content_preview or "",
+    ])
+    title = (article.title or "").strip().lower().rstrip(".")
+    kept = []
+    seen = set()
+    for sentence in split_sentences(source):
+        cleaned = clean_line(sentence, limit=420)
+        key = cleaned.lower()
+        if not cleaned or key in seen or len(cleaned) < 40:
+            continue
+        if _BOILER.search(cleaned):
+            continue
+        if cleaned.lower().rstrip(".") == title:
+            continue
+        if _THIN_RELEASE.search(cleaned) and not re.search(r"\d", cleaned):
+            continue
+        seen.add(key)
+        kept.append(cleaned)
+    numbered = [sentence for sentence in kept if re.search(r"\d", sentence)]
+    chosen = numbered if len(numbered) >= 3 else kept
+    return " ".join(chosen[:5])
+
+
+def _require_schema(payload) -> None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise SchemaError("LLM output failed schema validation: items must be a list")
+    for row in payload["items"]:
+        if not isinstance(row, dict):
+            raise SchemaError("LLM output failed schema validation: item is not an object")
+        if isinstance(row.get("index"), bool) or not isinstance(row.get("index"), int):
+            raise SchemaError("LLM output failed schema validation: index must be an integer")
+        for key in ("headline", "body", "why_it_matters"):
+            if not str(row.get(key) or "").strip():
+                raise SchemaError(f"LLM output failed schema validation: missing {key}")
+        if len(split_sentences(str(row["body"]))) < 3:
+            raise SchemaError("LLM output failed schema validation: body needs at least 3 sentences")
+
+
+def _grounded_body(body: str, article: Article) -> str:
+    source = _source_text(article)
+    kept = []
+    for sentence in split_sentences(body or ""):
+        cleaned = clean_line(sentence, limit=420)
+        if cleaned and line_is_grounded(cleaned, source, analysis=False):
+            kept.append(cleaned)
+    return " ".join(kept)
 
 
 def _fallback_pairs(articles: list, limit: int) -> tuple:
@@ -316,7 +398,7 @@ def _fallback_pairs(articles: list, limit: int) -> tuple:
     pairs = []
     for article in chosen:
         what, why = extractive_lines(article)
-        pairs.append((article, what, why))
+        pairs.append((article, what, factual_body(article), why))
     lede = theme_lede(chosen) if chosen else ""
     return lede, pairs
 
@@ -329,10 +411,12 @@ def compose_briefing(
     strict_auth: bool,
     recent=None,
     limit: int = 7,
+    require_full_body: bool = False,
 ) -> tuple:
     """Rank the shortlist and write the lede plus items. Returns (lede, pairs).
 
-    pairs is a list of (article, what_happened, why_it_matters) in rank order.
+    pairs is a list of (article, headline, body, why_it_matters) in rank order.
+    A 3-tuple from an older composer is still accepted by the briefing runner.
     """
     if not articles:
         return "", []
@@ -343,16 +427,18 @@ def compose_briefing(
     except AuthError:
         if strict_auth:
             raise
-        print("Warning: Together auth failed. Using the shortlist order.", file=sys.stderr)
+        print("Warning: model auth failed. Using the shortlist order.", file=sys.stderr)
         return _fallback_pairs(articles, limit)
     except Exception as exc:
-        print(f"Warning: Together ranking failed ({exc}). Using the shortlist order.", file=sys.stderr)
+        print(f"Warning: model ranking failed ({exc}). Using the shortlist order.", file=sys.stderr)
         return _fallback_pairs(articles, limit)
 
     payload = _parse_json_object(raw)
+    if require_full_body:
+        _require_schema(payload)
     rows = payload.get("items") if payload else None
     if not isinstance(rows, list):
-        print("Warning: Together returned no ranking. Using the shortlist order.", file=sys.stderr)
+        print("Warning: model returned no ranking. Using the shortlist order.", file=sys.stderr)
         return _fallback_pairs(articles, limit)
 
     pairs = []
@@ -366,9 +452,13 @@ def compose_briefing(
         seen.add(index)
         article = articles[index]
         what_fb, why_fb = extractive_lines(article)
-        what = _accept(str(row.get("what_happened") or ""), article, analysis=False, fallback=what_fb)
+        headline_raw = str(row.get("headline") or row.get("what_happened") or "")
+        headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
+        body = _grounded_body(str(row.get("body") or ""), article)
+        if not body:
+            body = factual_body(article)
         why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=why_fb)
-        pairs.append((article, what, why))
+        pairs.append((article, headline, body, why))
         if len(pairs) >= limit:
             break
 
@@ -376,8 +466,8 @@ def compose_briefing(
         # The model looked and found nothing worth posting.
         return "", []
 
-    combined = "\n".join(_source_text(article) for article, _, _ in pairs)
-    lede = clean_line(str(payload.get("lede") or ""), limit=240)
+    combined = "\n".join(_source_text(row[0]) for row in pairs)
+    lede = clean_line(str(payload.get("lede") or ""), limit=320)
     if not line_is_grounded(lede, combined, analysis=True):
-        lede = theme_lede([article for article, _, _ in pairs])
+        lede = theme_lede([row[0] for row in pairs])
     return lede, pairs

@@ -1,6 +1,63 @@
 # AI briefing
 
-A standalone GitHub Actions job that posts a short AI briefing to a public Slack channel on Monday, Wednesday, and Friday morning. It reads public lab blogs, news wires, model hubs, and Exa web search. It does not use email, calendars, Notion, or any private notes.
+One public AI news issue, generated once, then rendered as site MDX and as email HTML. Slack uses the same issue object; posting to Slack is not turned on yet.
+
+The copy is a general briefing for people building with AI. It does not take a Together product, customer, revenue, or competitor angle, and it does not use internal names. Sources are public pages with public URLs.
+
+`TOGETHER_API_KEY` must be Niki's personal Together key. Do not put a Together company key in that variable. There is no second key and no fallback.
+
+## Newsletter dry run
+
+This command never posts to Slack, never calls Resend, and never commits to `nbirkner/site`. It writes `./out/`.
+
+```bash
+python3 -m pip install -r requirements.txt
+export TOGETHER_API_KEY=...   # personal key, not a company key
+export EXA_API_KEY=...
+python3 main_newsletter.py --dry-run --window-end 2026-10-12
+python3 main_newsletter.py --dry-run --window-end 2026-10-16
+python3 main_newsletter.py --dry-run --window-end 2026-10-19
+```
+
+A date means 15:00 UTC on that day (the Monday / Wednesday / Friday slot). The window opens at the previous slot, so `--window-end 2026-10-19` covers Friday 16 Oct 15:00 UTC through Monday 19 Oct 15:00 UTC.
+
+Each run writes:
+
+| File | What |
+| --- | --- |
+| `out/YYYY-MM-DD.mdx` | Frontmatter `title`, `date`, `summary`, `tags`, then the stories |
+| `out/YYYY-MM-DD.html` | The same stories, plus a web link and `{{{RESEND_UNSUBSCRIBE_URL}}}` |
+| `out/YYYY-MM-DD.usage.txt` | Model, tokens per call, totals, and dollar cost |
+
+If a guardrail blocks the issue, the command writes `out/YYYY-MM-DD.blocked.txt` instead of the MDX and HTML, and exits 2.
+
+Without `TOGETHER_API_KEY` the run still builds an issue from the article text and logs `llm_calls: 0`. Without `EXA_API_KEY` it uses the feeds only. `RESEND_API_KEY` and `RESEND_AUDIENCE_ID` are not read by this command.
+
+### Cost lines in the usage log
+
+Together GLM-5.3 (`zai-org/GLM-5.3`), from [together.ai/pricing](https://www.together.ai/pricing) on 19 Oct 2026: **$1.40 / 1M input tokens**, **$4.40 / 1M output tokens**. The log multiplies the token totals by those rates and by 13 for a Monday / Wednesday / Friday month.
+
+Exa, from [exa.ai/docs/admin/pricing](https://exa.ai/docs/admin/pricing): search type `auto` is **$7 / 1,000 requests** ($0.007 each, this bot asks for 5 results). Contents text is **$1 / 1,000 pages** ($0.001 each). The free tier is **$10 of credits each month**. The log shows the run cost, the 13-run month, and what remains after that credit.
+
+## Guardrails
+
+Publishing stops, and this dry run writes a blocked file, when:
+
+- a story has no public `http` or `https` URL
+- the text mentions Together internals, customers, revenue, competitors, or other non-public material
+- the body is a generic one-liner such as "It adds new features" (fewer than three concrete sentences)
+- the issue is empty or too short, or it repeats the last issue's URLs
+- the text is unsafe or contains a secret
+- the model reply fails the issue schema (headline, body of at least three sentences, why it matters, integer index)
+- a second send would land in the same Monday / Wednesday / Friday slot (checked only on a real send; this command never sends)
+
+Stories that fail the one-liner or URL check are dropped. The other checks block the whole issue.
+
+## Site changes
+
+This repo does not edit `nbirkner/site`. The MDX files are meant for `src/content/newsletter/` on that Astro site. See the end of this file for the page and signup work.
+
+A standalone GitHub Actions job will post the same issue to Slack later. It reads public lab blogs, news wires, model hubs, and Exa web search. It does not use email, calendars, Notion, or any private notes.
 
 If nothing important landed since the previous run, it posts a one-line quiet note instead of filling the channel.
 
@@ -32,7 +89,7 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 
 | Secret | Value |
 | --- | --- |
-| `TOGETHER_API_KEY` | A Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys) |
+| `TOGETHER_API_KEY` | Niki's **personal** Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). Not a Together company key. |
 | `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
 | `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) |
 
@@ -92,7 +149,9 @@ Each run covers items published since the previous successful post. The Monday r
 
 ## What gets posted
 
-A one-line lede, then four to seven items when the week supports it, and fewer when it does not. Items are ranked against each other for people building AI products and infrastructure, with the last five posted briefings in mind so a repeat title is skipped.
+The Monday / Wednesday / Friday schedule is paused. The workflow only runs when someone starts it, and it runs `main_newsletter.py --dry-run`. Nothing is sent.
+
+A lede, then four to seven stories when the window supports it, and fewer when it does not. Stories are ranked for people building with AI, with the last five issues in mind so a repeat link is skipped. Slack, the site, and the email are three renders of that same issue.
 
 - frontier models, open weights, and price changes
 - agents and agent security
@@ -100,7 +159,7 @@ A one-line lede, then four to seven items when the week supports it, and fewer w
 - policy and major legal moves
 - large deals
 
-Each item is one sentence on what happened, one sentence on why it matters, and a link to the public source. The sentences keep prices, benchmark numbers, dates, and availability when those are in the source, including a caveat when the source calls a figure company-reported or unaudited. Customer stories, market blurbs, release candidates, and office openings are left out. Routine patch notes are included only when they change how teams serve models this week.
+Each story is a specific headline, three to five sentences of facts and numbers from the full article, one line on why it matters for people building with AI, and the public source link. Prices, dates, and availability stay when they are in the source, including a caveat when the source calls a figure company-reported or unaudited. Customer stories, market blurbs, release candidates, and office openings are left out. A release note that only says it adds new features is dropped.
 
 Sources live in `config.yaml`:
 
@@ -128,3 +187,16 @@ python3 -m pytest tests/ -v
 ```
 
 Tests do not call Slack, Together, or Exa. HTTP is mocked.
+
+## Site archive (not edited from this repo)
+
+`nbirkner/site` is Astro + MDX and is live at [www.nikibirkner.com](https://www.nikibirkner.com). The bot writes MDX; the site still needs:
+
+1. A content collection `src/content/newsletter/` whose schema accepts `title` (string), `date` (date), `summary` (string), and `tags` (list of strings). Drop each `out/YYYY-MM-DD.mdx` in that folder. The filename is the slug.
+2. `/newsletter`, an index of issues, newest first. Each row is the date, the title, and the summary, linking to `/newsletter/YYYY-MM-DD`. Use the same type and spacing as the rest of the site (the monospace aside, the quiet calendar palette). Do not invent a second visual system.
+3. `/newsletter/[slug]`, one page per issue that renders the MDX. The email's "Read this on the web" link points at `https://www.nikibirkner.com/newsletter/YYYY-MM-DD`.
+4. A signup box on the index and on the home page, matching the existing form styling if the site already has inputs, otherwise a single email field and a button in the site's current type.
+5. A small Vercel function, not a client-side call to Resend. `POST /api/newsletter/subscribe` with `{ email }` creates a Resend contact in `RESEND_AUDIENCE_ID` as unsubscribed and emails a confirm link. `GET /api/newsletter/confirm?token=...` sets the contact to subscribed. That is the double opt-in. The function reads `RESEND_API_KEY` from Vercel env. The browser never sees the key.
+6. Resend domain verification for `nikibirkner.com` (SPF, DKIM, and the return-path Resend shows in the dashboard) before any broadcast from `newsletter@nikibirkner.com`. The dry run does not send, so this can wait until a send command exists.
+
+When a send path is added later, it should broadcast the same HTML this command writes, to that audience, and commit the same MDX to `src/content/newsletter/` with a GitHub token that can push to `nbirkner/site`. It must keep using the personal `TOGETHER_API_KEY` only.

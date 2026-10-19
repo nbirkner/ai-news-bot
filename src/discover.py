@@ -25,6 +25,8 @@ class DiscoveryResult:
     exa_count: int = 0
     exa_calls: int = 0
     exa_cap: int = 30
+    exa_search_calls: int = 0
+    exa_content_pages: int = 0
     exa_note: str = ""
     since: datetime | None = None
 
@@ -101,6 +103,8 @@ def prepare_candidates(
         )
 
     result.exa_calls = budget.used
+    result.exa_search_calls = budget.search_calls
+    result.exa_content_pages = budget.content_pages
     result.exa_note = result.exa_note or budget.stop_reason
     extra = ""
     if result.exa_note and result.exa_note != budget.stop_reason:

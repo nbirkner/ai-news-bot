@@ -23,6 +23,20 @@ class BriefingItem:
     url: str
     source_name: str
     also: tuple = ()  # extra (url, label) citations
+    body: str = ""  # 3-5 factual sentences. Empty only on the legacy one-line path.
+
+
+@dataclass
+class Issue:
+    """One public briefing. Slack, MDX, and email are renders of this object."""
+
+    title: str
+    date: str  # YYYY-MM-DD, the scheduled window end
+    summary: str
+    tags: list
+    items: list
+    since: datetime | None = None
+    until: datetime | None = None
 
 
 @dataclass

@@ -362,7 +362,7 @@ def test_compose_ranks_from_full_text_and_checks_facts(monkeypatch):
     # $9 billion is not in the source, so the what-line falls back.
     assert "9" not in pairs[1][1]
     assert "1.5" in pairs[1][1] or "Tenstorrent" in pairs[1][1]
-    assert line_is_grounded(lede, "\n".join(article.full_text for article, _, _ in pairs), analysis=True) or "mostly about" in lede
+    assert line_is_grounded(lede, "\n".join(row[0].full_text for row in pairs), analysis=True) or "mostly about" in lede
 
 
 def test_llm_rank_path_posts_a_low_score_story_on_dry_run(tmp_path):
