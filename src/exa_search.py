@@ -71,7 +71,10 @@ _HOSTS = (
     ("federalregister.gov", "Federal Register", "news", 1),
     ("engineering.fb.com", "Meta Engineering", "lab", 1),
     ("minimax.io", "MiniMax", "lab", 1),
-    ("pymnts.com", "PYMNTS", "news", 2),
+    ("pymnts.com", "PYMNTS", "news", 3),
+    ("finance.yahoo.com", "Yahoo Finance", "news", 2),
+    ("news.yahoo.com", "Yahoo", "news", 2),
+    ("marketscreener.com", "MarketScreener", "news", 3),
 )
 
 

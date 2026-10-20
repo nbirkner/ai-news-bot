@@ -6,7 +6,8 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.dedupe import canonical_url, dedupe_articles, jaccard
+from src.dedupe import canonical_url, dedupe_articles, event_already_happened, same_underlying_event
+from src.rank import is_low_trust
 from src.exa_search import ExaBudget, resolve_cap, search_queries
 from src.fetch import fetch_all
 from src.rank import shortlist_for_reading
@@ -35,7 +36,7 @@ def _already_posted(article, items: list) -> bool:
     for item in items:
         if canonical_url(article.url) == canonical_url(item.get("url") or ""):
             return True
-        if jaccard(article.title, item.get("title") or "") >= 0.55:
+        if same_underlying_event(article, item.get("title") or ""):
             return True
     return False
 
@@ -85,9 +86,14 @@ def prepare_candidates(
     for article in combined:
         if canonical_url(article.url) in seen:
             continue
+        if event_already_happened(article, since):
+            print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
+            continue
         if _already_posted(article, recent_items):
             print(f"Skip, already briefed: {article.title}", file=sys.stderr)
             continue
+        if is_low_trust(article):
+            article.source_priority = max(article.source_priority, 5)
         fresh.append(article)
     result.fresh = fresh
     result.pool = dedupe_articles(fresh)
@@ -101,6 +107,13 @@ def prepare_candidates(
             exa_api_key=exa_api_key,
             budget=budget if exa_api_key else None,
         )
+        kept = []
+        for article in result.shortlist:
+            if event_already_happened(article, since):
+                print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
+                continue
+            kept.append(article)
+        result.shortlist = kept
 
     result.exa_calls = budget.used
     result.exa_search_calls = budget.search_calls

@@ -110,10 +110,54 @@ def test_two_outlets_covering_one_acquisition_are_the_same_story():
     assert not same_story(lab, other)
 
 
+def test_a_later_writeup_uses_the_event_date_not_the_byline():
+    from src.dedupe import event_already_happened, event_date, same_underlying_event
+    recap = article(
+        "https://examplellp.com/client-alert",
+        "Client alert: eight states sue OpenAI",
+        preview="On October 14, 2026, eight states sued OpenAI over child safety.",
+    )
+    recap.published_at = datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert event_date(recap).isoformat() == "2026-10-14"
+    assert event_already_happened(recap, since)
+    assert same_underlying_event(
+        recap,
+        "Eight US states sue OpenAI, claiming ChatGPT harms children",
+    )
+    fresh = article(
+        "https://www.reuters.com/world/openai-raise",
+        "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+        preview="OpenAI is racing to raise $30 billion, Reuters reported on October 19, 2026.",
+    )
+    fresh.published_at = datetime(2026, 10, 19, 23, tzinfo=timezone.utc)
+    assert not event_already_happened(fresh, since)
+
+
 def test_a_model_launch_is_not_the_same_story_as_a_funding_round():
     launch = article("https://openai.com/gpt", "OpenAI releases a new model for coding", priority=1, kind="lab")
     money = article("https://www.reuters.com/raise", "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO")
     assert not same_story(launch, money)
+
+
+def test_a_readable_wire_copy_beats_a_403_stub():
+    stub = article(
+        "https://www.reuters.com/technology/openai-raise",
+        "EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+        priority=2,
+        preview="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+    )
+    readable = article(
+        "https://www.pymnts.com/openai-raise",
+        "OpenAI Racing to Raise $30 Billion Ahead of Anthropic Listing",
+        priority=3,
+        preview="OpenAI is pitching investors on $50 billion of annualized revenue. " * 4,
+    )
+    readable.full_text = readable.content_preview * 3
+    readable.source_domain = "pymnts.com"
+    kept = dedupe_articles([stub, readable])
+    assert len(kept) == 1
+    assert kept[0].url == readable.url
 
 
 def test_dedupe_keeps_the_lab_over_the_recap():

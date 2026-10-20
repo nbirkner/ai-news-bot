@@ -172,6 +172,8 @@ def generate_issue(
             recent=memory,
             limit=limit,
             require_full_body=bool(api_key),
+            since=since,
+            until=until,
         )
     except AuthError as exc:
         return _empty(until, since), ["Together API rejected the key or model name. Not publishing."], discovered

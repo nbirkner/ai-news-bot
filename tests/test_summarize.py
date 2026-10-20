@@ -260,12 +260,77 @@ def test_grounding_that_drops_sentences_falls_back_to_the_source():
 
 
 def test_filler_why_names_the_story_instead_of_a_slogan():
-    from src.summarize import is_filler_why, specific_why
+    from src.summarize import is_criteria_echo, is_filler_why, specific_why
     slogan = "For people building with AI, this is worth a look if you ship or run models."
     assert is_filler_why(slogan)
-    line = specific_why(_article("Claude traces in OpenTelemetry beta", "Claude traces in OpenTelemetry beta."))
-    assert "Claude traces" in line
-    assert not is_filler_why(line)
+    echo = specific_why(_article("llm-d v1.0: distributed inference", "llm-d is a Kubernetes project."))
+    assert "llm-d" in echo
+    assert is_criteria_echo(echo)
+
+
+def test_a_prefixed_consequence_keeps_the_consequence():
+    from src.summarize import _usable_why, is_criteria_echo
+    article = _article(
+        "Open-weight models took most of the tokens",
+        "Open-weight models handled 71.5% of tokens.",
+    )
+    prefixed = "For people building with AI, a cheap token and an expensive closed model are different bills."
+    why = _usable_why(prefixed, "Open-weight models handled 71.5% of tokens.", article)
+    assert not is_criteria_echo(why)
+    assert "different bills" in why
+
+
+def test_a_criteria_echo_is_replaced_with_what_the_product_is():
+    from src.summarize import _usable_why, is_criteria_echo
+    echo = "A builder or an AI exec would bring up llm-d v1.0: distributed inference this week."
+    assert is_criteria_echo(echo)
+    article = _article(
+        "llm-d v1.0: distributed inference",
+        "llm-d is a Kubernetes-native stack for serving a model across nodes.",
+    )
+    article.full_text = (
+        "llm-d is a Kubernetes-native stack for serving a model across nodes. "
+        "Version 1.0 is now stable."
+    )
+    why = _usable_why(echo, "Version 1.0 is now stable.", article)
+    assert not is_criteria_echo(why)
+    assert "kubernetes" in why.lower()
+
+
+def test_a_raw_page_title_is_rewritten():
+    from src.summarize import headline_is_raw, rewrite_headline
+    title = "llm-d v1.0: a long page title that should not ship as the headline unchanged"
+    assert headline_is_raw(title, title)
+    rewritten = rewrite_headline(title)
+    assert rewritten != title
+    assert len(rewritten) < len(title)
+
+
+def test_expectation_framing_drops_unless_the_wire_says_it():
+    from src.summarize import strip_unverified_expectation
+    article = _article(
+        "OpenAI races to raise $30 billion",
+        "OpenAI is pitching $50 billion of annualized revenue.",
+        kind="news",
+    )
+    article.source_domain = "pymnts.com"
+    body = (
+        "OpenAI is pitching investors on $50 billion of annualized revenue. "
+        "That is about $20 billion less than expected."
+    )
+    cleaned = strip_unverified_expectation(body, article)
+    assert "less than expected" not in cleaned.lower()
+    assert "$50 billion" in cleaned
+
+
+def test_a_short_window_lede_does_not_say_this_week():
+    from datetime import timedelta
+    from src.summarize import fit_lede
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    until = since + timedelta(hours=27)
+    lede = fit_lede("This week brings a federal order and a funding round.", since, until)
+    assert lede.startswith("Since Monday morning")
+    assert "this week" not in lede.lower()
 
 
 def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
@@ -279,7 +344,12 @@ def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
     lead = _order_lead(article)
     why = _order_why(article)
     assert lead.startswith("Order excludes and removes DeepSeek Products")
-    assert "procurements" in why
+    article.full_text = (
+        "The order removes DeepSeek products and third-party products developed "
+        "using DeepSeek from civilian agency information technology."
+    )
+    why = _order_why(article)
+    assert "audit" in why.lower()
     assert "bring up" not in why
 
 
@@ -296,7 +366,7 @@ def test_a_cost_cut_is_not_labeled_as_a_benchmark():
     assert "vendor-reported" not in label_benchmark(cost_only, article)
     scored = "It scores 73.7% on the coding benchmark. Weights ship later."
     labeled = label_benchmark(scored, article)
-    assert "benchmark, a vendor-reported figure." in labeled
+    assert "benchmark, a company-reported figure." in labeled
     assert "Weights ship later." in labeled
 
 

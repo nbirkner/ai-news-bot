@@ -27,7 +27,8 @@ _INFRA = re.compile(
 )
 _DEAL = re.compile(
     r"\b(acqui(?:res|red|sition)|merger|funding round|series [a-e]|raises \$|"
-    r"raise[sd]?\s+\$|fundraising|valuation|ipo)\b",
+    r"raise[sd]?\s+\$|fundraising|valuation|ipo)\b|"
+    r"\$\s?\d[\d.]*(?:\s?(?:billion|bln))|\bmultibillion\b",
     re.I,
 )
 _NAMED_MODEL = re.compile(r"\b(minimax|kimi)\b", re.I)
@@ -47,12 +48,32 @@ _PRERELEASE = re.compile(
     re.I,
 )
 _OFFICE = re.compile(r"\boffices?\b|\bnew hub\b", re.I)
+_TAX = re.compile(r"\b(tax hike|proposition \d+|income tax)\b", re.I)
 _CUSTOMER = re.compile(
     r"^(?:How\s+)?[A-Z0-9][\w.&'-]*(?:\s+[A-Z0-9][\w.&'-]*){0,5}\s+"
     r"(?i:cuts|saves|uses|partners|brings|runs|deploys|takes|puts)\b"
 )
 
 _KIND_BONUS = {"lab": 3, "release": 2, "news": 1, "paper": 0}
+
+
+_ROUNDUP_HOSTS = (
+    "dailyaibrief",
+    "therundown",
+    "bensbites",
+    "thebatch",
+    "importai",
+)
+_LAW_FIRM = re.compile(r"\b(llp|law firm|attorneys at law|client alert)\b", re.I)
+
+
+def is_low_trust(article) -> bool:
+    """Roundups and law-firm blogs lose to a wire or a primary document."""
+    host = (article.source_domain or "").lower()
+    if any(bit in host for bit in _ROUNDUP_HOSTS):
+        return True
+    blob = f"{host} {article.source_name or ''} {article.title or ''}"
+    return _LAW_FIRM.search(blob) is not None
 
 
 def score_article(article) -> int:
@@ -87,6 +108,8 @@ def score_article(article) -> int:
         score -= 4
     if _CUSTOMER.search(title):
         score -= 6
+    if is_low_trust(article):
+        score -= 4
     return score
 
 
@@ -152,6 +175,8 @@ def hard_noise(article) -> bool:
     if _OPINION.search(title):
         return True
     if _OFFICE.search(title) and not _STRONG_POLICY.search(title) and not _DEAL.search(title):
+        return True
+    if _TAX.search(title):
         return True
     return False
 

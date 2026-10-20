@@ -551,7 +551,7 @@ def fetch_federal_register(source: dict) -> list:
 _WIRE_HOSTS = {
     "reuters.com": ("Reuters", "news", 2),
     "investing.com": ("Investing.com", "news", 2),
-    "pymnts.com": ("PYMNTS", "news", 2),
+    "pymnts.com": ("PYMNTS", "news", 3),
     "techcrunch.com": ("TechCrunch", "news", 2),
     "cnbc.com": ("CNBC", "news", 2),
     "politico.com": ("Politico", "news", 2),
@@ -610,21 +610,37 @@ def decode_google_news_url(article_url: str) -> str:
     return found.group(0) if found else ""
 
 
-def _readable_excerpt(url: str) -> str:
+def _syndication_excerpt(title: str, url: str) -> tuple:
+    """Yahoo, PYMNTS, or MarketScreener copy when the wire page returns 403."""
+    from src.read import _host as read_host
+    from src.read import _syndication_label, syndication_text
+    text, via = syndication_text(title, url)
+    if len(text) >= 200 and via:
+        return text, via, _syndication_label(via), read_host(via)
+    return "", url, "", ""
+
+
+def _readable_excerpt(url: str, title: str = "") -> tuple:
+    """(text, url, source_name, domain). Source fields are set only for a syndication copy."""
     host = _host(url)
-    if any(host == bit or host.endswith("." + bit) for bit in (
+    blocked = any(host == bit or host.endswith("." + bit) for bit in (
         "reuters.com", "politico.com", "wsj.com", "ft.com", "bloomberg.com", "nytimes.com",
-    )):
-        return ""
+    ))
+    if blocked:
+        if "reuters.com" in host and title:
+            return _syndication_excerpt(title, url)
+        return "", url, "", ""
     try:
         raw = http_get(url).text
     except Exception as exc:
         print(f"Warning: wire page fetch failed for {url}: {exc}", file=sys.stderr)
-        return ""
+        if title and ("403" in str(exc) or "401" in str(exc)):
+            return _syndication_excerpt(title, url)
+        return "", url, "", ""
     soup = BeautifulSoup(raw, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "noscript"]):
         tag.decompose()
-    return collapse_ws(soup.get_text(" ", strip=True))[:4000]
+    return collapse_ws(soup.get_text(" ", strip=True))[:4000], url, "", ""
 
 
 def fetch_google_news(source: dict) -> list:
@@ -704,7 +720,13 @@ def fetch_google_news(source: dict) -> list:
             "kind": kind,
             "priority": priority,
         }
-        excerpt = _readable_excerpt(url)
+        excerpt, via, via_name, via_domain = _readable_excerpt(url, title)
+        if via and via != url:
+            url = via
+            if via_name:
+                name = via_name
+            if via_domain:
+                wired = dict(wired, domain=via_domain, name=name)
         article = _article(wired, url, title, published, excerpt or title)
         if len(excerpt) >= 200:
             article.full_text = excerpt
@@ -755,8 +777,18 @@ def fetch_all(config: dict, since: datetime, now: datetime | None = None) -> Fet
             print(f"Warning: {source['name']} failed: {exc}", file=sys.stderr)
             continue
         fresh = [item for item in fetched if in_window(item.published_at, since, now)]
-        fresh.sort(key=lambda item: item.published_at, reverse=True)
-        kept = fresh[:max_per_source]
+        # A high-scoring Monday story should survive a source that also
+        # published eight quieter notes on Tuesday.
+        from src.rank import score_article
+        fresh.sort(
+            key=lambda item: (score_article(item), item.published_at.timestamp()),
+            reverse=True,
+        )
+        cap = max_per_source
+        if source.get("type") == "google_news":
+            # This source mixes several publishers and already ranked them.
+            cap = max(cap, int(source.get("max_results", cap)))
+        kept = fresh[:cap]
         print(
             f"{source['name']}: {len(kept)} in window ({len(fetched)} fetched)",
             file=sys.stderr,

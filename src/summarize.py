@@ -5,6 +5,7 @@ import time
 
 import requests
 
+from src.read import _CHROME
 from src.clean import (
     clean_line,
     first_sentence,
@@ -120,8 +121,38 @@ def _short_lead(text: str, limit: int = 110) -> str:
     return cut or cleaned[:limit]
 
 
+_CRITERIA_ECHO = re.compile(
+    r"a builder or an ai exec would bring up|"
+    r"bring it up this week|"
+    r"people building with ai|"
+    r"worth a look",
+    re.I,
+)
+
+
+def is_criteria_echo(line: str) -> bool:
+    """The selection bar is for ranking. It must not ship as copy."""
+    return bool(_CRITERIA_ECHO.search(line or ""))
+
+
+def _concrete_remainder(why: str) -> str:
+    """Keep a real consequence that was prefixed with the selection bar."""
+    text = (why or "").strip()
+    text = re.sub(r"^for people building with ai[:,]?\s*", "", text, flags=re.I)
+    text = re.sub(
+        r"^a builder or an ai exec would bring up\b.*?this week[:,.]?\s*",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"^worth a look[:,.]?\s*", "", text, flags=re.I)
+    if not text or is_criteria_echo(text) or is_filler_why(text):
+        return ""
+    return clean_line(text)
+
+
 def specific_why(article: Article) -> str:
-    """One line a builder or an exec could repeat. Uses the headline, no new facts."""
+    """Deprecated echo of the selection bar. Kept so tests can reject it."""
     title = _short_lead(article.title, 80)
     if not title:
         return ""
@@ -144,18 +175,152 @@ def _order_lead(article: Article) -> str:
 
 
 def _order_why(article: Article) -> str:
-    """Consequence of a removal order, still using only the document's own words."""
-    match = _ORDER_TITLE.search(article.title or "")
-    if not match:
+    """Consequence of a removal order that also covers third-party products."""
+    text = _source_text(article).lower()
+    if not re.search(r"exclusion|removal", text):
         return ""
-    product = match.group(1).strip(" .")
-    line = (
-        f"The order takes {product} out of federal civilian procurements "
-        "and out of systems already covered by the notice."
-    )
-    if line_is_grounded(line, _source_text(article), analysis=True):
-        return line
+    if "third-party" not in text and "third party" not in text:
+        return ""
+    return "Vendors must audit which models sit under their products."
+
+
+def _norm_title(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def headline_is_raw(headline: str, title: str) -> bool:
+    """True when the lead is the page title, or a long uncut prefix of it."""
+    left = _norm_title(headline)
+    right = _norm_title(title)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if len(left) >= 40 and (right.startswith(left) or left.startswith(right)):
+        return True
+    return False
+
+
+def rewrite_headline(title: str) -> str:
+    """A short lead that is not the raw page title."""
+    text = re.sub(
+        r"^(exclusive|breaking|update|analysis)\s*:\s*",
+        "",
+        title or "",
+        flags=re.I,
+    ).strip()
+    text = re.sub(r"^notice of order regarding\s+", "", text, flags=re.I).strip()
+    if ":" in text:
+        left, right = [part.strip(" -") for part in text.split(":", 1)]
+        pick = left if 8 <= len(left) <= 90 else right
+        if _norm_title(pick) != _norm_title(title) and len(pick) >= 8:
+            return pick.rstrip(".")
+    words = text.split()
+    if len(words) > 8:
+        short = " ".join(words[:8]).rstrip(",;:-")
+        if _norm_title(short) != _norm_title(title):
+            return short
+    if words and _norm_title(text) == _norm_title(title):
+        return " ".join(words[: max(3, len(words) - 2)]).rstrip(",;:-")
+    return text.rstrip(".")
+
+
+def _definition_why(article: Article) -> str:
+    """Say what an unfamiliar product is, using a sentence from the page."""
+    source = _source_text(article)
+    title = (article.title or "").split(":")[0]
+    for sentence in split_sentences(source):
+        if not re.search(r"\bis an?\b", sentence, re.I):
+            continue
+        if not shares_distinctive_word(sentence, title):
+            continue
+        cleaned = clean_line(sentence, limit=240)
+        if not cleaned or is_criteria_echo(cleaned) or is_filler_why(cleaned):
+            continue
+        if line_is_grounded(cleaned, source, analysis=True):
+            return cleaned
     return ""
+
+
+def _restates(why: str, body: str) -> bool:
+    target = _norm_title(why)
+    if len(target) < 24:
+        return False
+    if target and target in _norm_title(body):
+        return True
+    from src.dedupe import jaccard
+    for sentence in split_sentences(body or ""):
+        if jaccard(why, sentence) >= 0.6:
+            return True
+    return False
+
+
+def _usable_why(why: str, body: str, article: Article) -> str:
+    """A consequence, or a definition. Never the selection-bar template."""
+    order = _order_why(article)
+    candidate = (why or "").strip()
+    if is_criteria_echo(candidate) or is_filler_why(candidate):
+        candidate = _concrete_remainder(candidate)
+    echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
+    if order and (echoed or _restates(candidate, body)):
+        return order
+    if candidate and not echoed and not _restates(candidate, body):
+        return candidate
+    defined = _definition_why(article)
+    if defined and not _restates(defined, body):
+        return defined
+    if order:
+        return order
+    return ""
+
+
+_EXPECTATION_CLAUSE = re.compile(
+    r",?\s*(?:about|roughly|nearly|some)?\s*\$?\s?\d[\d.]*(?:\s?(?:billion|bln|million))?\s+"
+    r"less than (?:the )?expected\b",
+    re.I,
+)
+_EXPECTATION_SENTENCE = re.compile(
+    r"less than expected|than expected|short of expectations|below expectations",
+    re.I,
+)
+
+
+def strip_unverified_expectation(body: str, article: Article) -> str:
+    """Drop 'less than expected' unless the wire itself says it.
+
+    A recap turned Reuters' '$50 billion, heading to $70 billion' into
+    '$20 billion less than expected'. That framing does not survive
+    unless Reuters (or its Yahoo copy) uses those words.
+    """
+    source = f"{article.full_text or ''} {article.content_preview or ''}"
+    domain = (article.source_domain or "").lower()
+    wire = "reuters.com" in domain or "yahoo.com" in domain
+    if wire and _EXPECTATION_SENTENCE.search(source):
+        return body
+    text = _EXPECTATION_CLAUSE.sub("", body or "")
+    kept = [sentence for sentence in split_sentences(text) if not _EXPECTATION_SENTENCE.search(sentence)]
+    return " ".join(kept)
+
+
+def fit_lede(lede: str, since=None, until=None) -> str:
+    """A 29-hour window is not 'this week'."""
+    text = (lede or "").strip()
+    if not text or since is None or until is None:
+        return text
+    hours = (until - since).total_seconds() / 3600.0
+    if hours > 48:
+        return text
+    if text.lower().startswith("since monday"):
+        return re.sub(r"\bthis week\b", "this window", text, flags=re.I)
+    if re.match(r"this week\b", text, re.I):
+        rest = re.sub(r"^this week\b[:,]?\s*", "", text, flags=re.I)
+        rest = re.sub(r"^(brings|pairs|is|has|includes|covers)\s+", "", rest, flags=re.I)
+        if rest:
+            rest = rest[0].lower() + rest[1:]
+        text = "Since Monday morning, " + rest
+        return text
+    lowered = text[0].lower() + text[1:] if text else ""
+    return "Since Monday morning, " + lowered
 
 
 def topic_for(article: Article) -> str:
@@ -426,10 +591,23 @@ def theme_lede(articles: list) -> str:
         body = themes[0]
     else:
         body = ", ".join(themes[:-1]) + " and " + themes[-1]
-    return f"For people building and running AI systems, this window is mostly about {body}."
+    return f"This window is mostly about {body}."
 
 
-def _rank_prompt(articles: list, recent: list, limit: int) -> str:
+def _window_note(since, until) -> str:
+    if since is None or until is None:
+        return ""
+    hours = (until - since).total_seconds() / 3600.0
+    if hours > 48:
+        return ""
+    return (
+        "The window is shorter than two days, from Monday morning through Tuesday morning. "
+        "Open the lede with 'Since Monday morning'. Do not write 'this week' in the lede, "
+        "the headlines, or the why-lines.\n"
+    )
+
+
+def _rank_prompt(articles: list, recent: list, limit: int, since=None, until=None) -> str:
     items = [_item_payload(article, index) for index, article in enumerate(articles)]
     already = [
         {"title": item.get("title") or "", "url": item.get("url") or ""}
@@ -439,6 +617,8 @@ def _rank_prompt(articles: list, recent: list, limit: int) -> str:
     return f"""You rank and write one public AI news briefing for people building with AI.
 
 The bar for keeping a story: would a builder or an AI exec bring it up this week?
+Do not echo that bar, or the words "this week", in the published lede, headlines, or why-lines.
+{_window_note(since, until)}
 Prefer, in this order:
 1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, DeepSeek, or MiniMax.
 2. Big money: revenue, ARR, a funding round, or an IPO path, when the text states the figure.
@@ -452,12 +632,12 @@ Skip stories that are already in the recent briefings unless the new piece is a 
 Do not return two items that are the same event from different outlets. Keep the primary document or the wire, and use the version whose text actually states the figures.
 Return between 4 and {limit} items when that many clear the bar. A federal exclusion or removal order clears the bar. A stated mega-round, revenue figure, or IPO path clears the bar. A security change that treats agents as insiders, or a breach with a stated scale, clears the bar. A frontier model with a stated price, size, or benchmark clears the bar. Include those ahead of a narrower product SDK or a small acquisition when both are in the candidates. Return fewer only when the window does not contain that many. Return an empty list when every candidate is noise. Never invent an item to fill the count.
 Public sources only. Do not mention a vendor's private customer list or unpublished revenue. Public revenue, ARR, funding, and IPO figures stay when that item's text states them. Do not add a name or number that is not in that item's text.
-A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press) over a recap that does not show the figure. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it. On a vendor's own post, vendor-reported is the same caveat.
+A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press, or a Yahoo copy of that wire) over a roundup or a law-firm blog. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it, including on a vendor's own post.
 
 For each chosen item:
-- headline: a short scannable lead, under 90 characters, with the spec or the number (dollars, percent, parameter count, or date). Not a bare version number, not a document title, and not a full paragraph.
-- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one specific sentence naming the consequence for this story (the number, the rule, the product, or the cost). Interpretation is allowed. New facts are not. Do not repeat a sentence from the body. No filler. Do not write "worth a look" or a generic line about people building with AI.
+- headline: a short rewritten lead, under 12 words, with the spec or the number (dollars, percent, parameter count, or date). Do not paste the page title. Not a bare version number and not a full paragraph.
+- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Do not write that a figure is "less than expected" or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, the consequence is that vendors must audit which models sit under their products. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
@@ -628,19 +808,18 @@ def label_benchmark(body: str, article: Article) -> str:
     text = body or ""
     if not re.search(r"\d+(?:\.\d+)?\s?%", text):
         return text
-    domain = (article.source_domain or "").lower()
-    vendor = "minimax." in domain
+    vendor = article.source_kind == "lab" or "minimax." in (article.source_domain or "").lower()
     lowered = text.lower()
-    if vendor and "vendor-reported" not in lowered and "company-reported" in lowered:
-        return re.sub("company-reported", "vendor-reported", text, count=1, flags=re.I)
-    if "company-reported" in lowered or "vendor-reported" in lowered:
+    if "vendor-reported" in lowered and "company-reported" not in lowered:
+        return re.sub("vendor-reported", "company-reported", text, count=1, flags=re.I)
+    if "company-reported" in lowered:
         return text
-    if article.source_kind != "lab" and not vendor:
+    if not vendor:
         return text
     source = f"{article.full_text or ''} {article.content_preview or ''}"
     if not _BENCH_SENTENCE.search(source):
         return text
-    word = "vendor-reported" if vendor else "company-reported"
+    word = "company-reported"
     labeled = False
     out = []
     for sentence in split_sentences(text):
@@ -681,9 +860,12 @@ def _grounded_body(body: str, article: Article) -> str:
 
 
 _CLEAR_BAR = re.compile(
-    r"\b(exclusion|barred)\b|\$\s?\d[\d.]*\s?(?:billion|bln)\b",
+    r"\b(exclusion|barred)\b|"
+    r"(?:raise|raises|raised|valuation|acqui\w*|funding).{0,48}\$\s?\d[\d.]*\s?(?:billion|bln)|"
+    r"\$\s?\d[\d.]*\s?(?:billion|bln).{0,48}(?:raise|valuation|acqui\w*|funding|deal)",
     re.I,
 )
+_DETAILS_LEAK = re.compile(r"\b(?:Prices|Benchmarks|Dates|Availability|Caveats)\s*:", re.I)
 
 
 def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
@@ -713,14 +895,16 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         if len(pairs) >= limit:
             break
         what, why = extractive_lines(article)
-        headline = _order_lead(article) or _short_lead(what or article.title, 110)
+        headline = _order_lead(article) or rewrite_headline(what or article.title)
+        if headline_is_raw(headline, article.title) or len(headline.split()) > 12:
+            headline = rewrite_headline(article.title)
         body = label_benchmark(factual_body(article), article)
         if len(split_sentences(body)) < 2:
             continue
-        why_line = _order_why(article) or why
-        if is_filler_why(why_line):
-            why_line = specific_why(article)
-        if not line_is_grounded(why_line, _source_text(article), analysis=True):
+        why_line = _usable_why(why, body, article)
+        if not why_line or is_criteria_echo(why_line):
+            continue
+        if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
             continue
         pairs.append((article, headline, body, why_line))
     return pairs
@@ -745,6 +929,8 @@ def compose_briefing(
     recent=None,
     limit: int = 7,
     require_full_body: bool = False,
+    since=None,
+    until=None,
 ) -> tuple:
     """Rank the shortlist and write the lede plus items. Returns (lede, pairs).
 
@@ -755,7 +941,7 @@ def compose_briefing(
         return "", []
     if not api_key:
         return _fallback_pairs(articles, limit)
-    prompt = _rank_prompt(articles, recent or [], limit)
+    prompt = _rank_prompt(articles, recent or [], limit, since=since, until=until)
     try:
         raw = _call_together(prompt, api_key, model)
     except AuthError:
@@ -793,18 +979,33 @@ def compose_briefing(
         what_fb, why_fb = extractive_lines(article)
         headline_raw = str(row.get("headline") or row.get("what_happened") or "")
         headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
-        order_lead = _order_lead(article)
-        if order_lead and (len(headline) > 90 or headline.lower().startswith("the ")):
-            headline = order_lead
+        if (
+            headline_is_raw(headline, article.title)
+            or len(headline.split()) > 12
+            or _CHROME.search(headline)
+        ):
+            headline = _order_lead(article) or rewrite_headline(article.title)
         elif len(headline) > 110:
-            headline = _short_lead(headline, 110) or _short_lead(article.title, 110)
-        body = label_benchmark(_publishable_body(str(row.get("body") or ""), article), article)
-        why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=why_fb)
+            headline = _short_lead(headline, 110)
+        if _CHROME.search(headline):
+            headline = clean_line(_CHROME.sub("", headline))
+        body = strip_unverified_expectation(
+            label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
+            article,
+        )
+        why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback="")
+        body = _DETAILS_LEAK.split(body)[0].strip()
+        why = _DETAILS_LEAK.split(why)[0].strip()
         body = _drop_repeated_why(body, why)
-        if is_filler_why(why) or (order_lead and why.lower().startswith("a builder or an ai exec")):
-            cited = _order_why(article) or specific_why(article)
-            if line_is_grounded(cited, _source_text(article), analysis=True):
-                why = cited
+        if _CHROME.search(body) or _CHROME.search(headline):
+            print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
+            continue
+        why = _usable_why(why or why_fb, body, article)
+        if headline_is_raw(why, article.title):
+            why = _usable_why("", body, article)
+        if not why or is_criteria_echo(why) or headline_is_raw(why, article.title):
+            print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
+            continue
         pairs.append((article, headline, body, why))
         if len(pairs) >= limit:
             break
@@ -816,7 +1017,8 @@ def compose_briefing(
     pairs = _backfill_clear_bar(articles, pairs, limit)
 
     combined = "\n".join(_source_text(row[0]) for row in pairs)
-    lede = clean_line(str(payload.get("lede") or ""), limit=320)
-    if not line_is_grounded(lede, combined, analysis=True):
-        lede = theme_lede([row[0] for row in pairs])
+    lede = fit_lede(clean_line(str(payload.get("lede") or ""), limit=320), since, until)
+    check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
+    if not line_is_grounded(check or lede, combined, analysis=True):
+        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     return lede, pairs

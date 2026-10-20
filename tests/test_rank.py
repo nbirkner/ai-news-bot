@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from src.models import Article
-from src.rank import score_article, select_items
+from src.rank import hard_noise, score_article, select_items
 
 
 def article(title, *, kind="news", url="https://example.com/a", source="Example", hours=10):
@@ -40,10 +40,15 @@ def test_market_blurb_stays_under_the_bar():
 def test_a_ban_and_a_mega_round_clear_the_bar():
     assert score_article(article("U.S. bans DeepSeek from government agency systems")) >= 6
     assert score_article(article("OpenAI races to raise $30 billion ahead of an Anthropic IPO")) >= 6
+    assert score_article(article("Anthropic in talks with Nscale over a multibillion-dollar deal")) >= 6
 
 
 def test_a_hacking_headline_stays_under_the_bar():
     assert score_article(article("AI agents are hacking John Deere equipment")) < 6
+
+
+def test_a_tax_commentary_is_not_a_story():
+    assert hard_noise(article("As billionaires fight a tax hike, a cofounder says he will pay $8 billion"))
 
 
 def test_office_opening_stays_under_the_bar():

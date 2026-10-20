@@ -385,7 +385,7 @@ def test_llm_rank_path_posts_a_low_score_story_on_dry_run(tmp_path):
         "sources": [{"name": "Politico"}, {"name": "DeepSeek"}, {"name": "vLLM"}],
     }
 
-    def composer(candidates, api_key, model, *, strict_auth, recent, limit):
+    def composer(candidates, api_key, model, *, strict_auth, recent, limit, **kwargs):
         chosen = [article for article in candidates if "safety bill" in article.title or article.title.startswith("DeepSeek")]
         assert any(len(article.full_text) > 80 for article in candidates)
         return (
