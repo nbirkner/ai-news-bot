@@ -140,6 +140,32 @@ def test_a_model_launch_is_not_the_same_story_as_a_funding_round():
     assert not same_story(launch, money)
 
 
+def test_a_later_roundup_of_an_earlier_round_is_already_announced():
+    from src.dedupe import round_already_announced
+    announced = article(
+        "https://www.reuters.com/technology/tenstorrent-raise",
+        "AI chip startup Tenstorrent more than doubles its valuation to $6.2 billion",
+        priority=2,
+    )
+    announced.published_at = datetime(2026, 10, 19, 11, 0, tzinfo=timezone.utc)
+    announced.source_name = "Reuters"
+    recap = article(
+        "https://techcrunch.com/2026/10/19/tenstorrent-hits-6-2b-valuation-to-scale-open-weight-ai-chips/",
+        "Tenstorrent hits $6.2B valuation to scale open-weight AI chips",
+        priority=2,
+    )
+    recap.published_at = datetime(2026, 10, 19, 18, 37, tzinfo=timezone.utc)
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert round_already_announced(recap, [announced], since)
+    inside = article(
+        "https://www.reuters.com/technology/openai-raise",
+        "OpenAI races to raise $30 billion ahead of an Anthropic IPO",
+        priority=2,
+    )
+    inside.published_at = datetime(2026, 10, 20, 1, tzinfo=timezone.utc)
+    assert not round_already_announced(inside, [announced], since)
+
+
 def test_a_readable_wire_copy_beats_a_403_stub():
     stub = article(
         "https://www.reuters.com/technology/openai-raise",
@@ -158,6 +184,29 @@ def test_a_readable_wire_copy_beats_a_403_stub():
     kept = dedupe_articles([stub, readable])
     assert len(kept) == 1
     assert kept[0].url == readable.url
+
+
+def test_the_federal_register_beats_a_wire_recap_of_the_same_order():
+    order = article(
+        "https://www.federalregister.gov/documents/2026/10/20/deepseek",
+        "Notice of Order Regarding Exclusion and Removal of DeepSeek Products From Federal Civilian Systems",
+        priority=1,
+    )
+    order.source_domain = "federalregister.gov"
+    order.source_name = "Federal Register"
+    order.full_text = "The order covers third-party products developed using the model. " * 8
+    wire = article(
+        "https://www.reuters.com/world/china-deepseek-ban",
+        "China says US' DeepSeek ban disregards Xi-Trump consensus",
+        priority=2,
+    )
+    wire.source_name = "Reuters"
+    wire.source_domain = "reuters.com"
+    wire.full_text = "China criticized the DeepSeek ban and the removal. " * 12
+    assert same_story(order, wire)
+    kept = dedupe_articles([wire, order])
+    assert len(kept) == 1
+    assert kept[0].source_domain == "federalregister.gov"
 
 
 def test_dedupe_keeps_the_lab_over_the_recap():

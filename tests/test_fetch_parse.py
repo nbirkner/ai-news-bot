@@ -156,6 +156,78 @@ def test_in_window():
     assert not in_window(datetime(2026, 10, 1, tzinfo=timezone.utc), since, now)
 
 
+def test_a_wire_that_rolled_off_the_sitemap_is_still_a_candidate():
+    from src.fetch import headlines_not_in
+    have = Article(
+        url="https://www.reuters.com/technology/openai-raise",
+        title="OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+    )
+    loss = Article(
+        url="https://news.google.com/rss/articles/loss",
+        title="Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 20, 19, 41, tzinfo=timezone.utc),
+    )
+    duplicate = Article(
+        url="https://news.google.com/rss/articles/same",
+        title="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+    )
+    kept = headlines_not_in([duplicate, loss], [have], cap=3)
+    assert [article.title for article in kept] == [loss.title]
+
+
+def test_reuters_is_read_before_a_later_pymnts_recap():
+    from src.fetch import rank_wire_headlines
+    fillers = [
+        Article(
+            url=f"https://www.cnbc.com/deepseek-{index}",
+            title=f"US bans DeepSeek from agency systems note {index}",
+            source_name="CNBC",
+            source_domain="cnbc.com",
+            published_at=datetime(2026, 10, 20, 12, index, tzinfo=timezone.utc),
+            source_kind="news",
+            source_priority=2,
+        )
+        for index in range(11)
+    ]
+    reuters = Article(
+        url="https://www.reuters.com/technology/openai-raise",
+        title="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=2,
+    )
+    pymnts = Article(
+        url="https://www.pymnts.com/openai-raise",
+        title="OpenAI Racing to Raise $30 Billion Ahead of Anthropic Listing",
+        source_name="PYMNTS",
+        source_domain="pymnts.com",
+        published_at=datetime(2026, 10, 20, 10, 39, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=3,
+    )
+    braze = Article(
+        url="https://www.reuters.com/technology/salesforce-braze",
+        title="Salesforce deepens AI bets with $5.66 billion Braze deal",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 20, 18, 16, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=2,
+    )
+    kept = rank_wire_headlines(fillers + [braze, pymnts, reuters], cap=1)
+    assert [article.url for article in kept] == [reuters.url]
+
+
 def test_monday_morning_pt_is_outside_and_tuesday_morning_is_inside():
     """Mon Oct 19 8:00 AM PT through Tue Oct 20 11:00 AM PT.
 

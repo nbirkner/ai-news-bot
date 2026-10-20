@@ -163,15 +163,12 @@ _ORDER_TITLE = re.compile(r"exclusion and removal of (.+?) from\b", re.I)
 
 
 def _order_lead(article: Article) -> str:
-    """A short lead for a removal order, using only words from the document title."""
+    """A short sentence for a removal order, not the raw Federal Register title."""
     match = _ORDER_TITLE.search(article.title or "")
     if not match:
         return ""
     product = match.group(1).strip(" .")
-    lead = f"Order excludes and removes {product} from federal civilian systems."
-    if line_is_grounded(lead, _source_text(article), analysis=False):
-        return lead.rstrip(".")
-    return ""
+    return f"Order excludes and removes {product} from federal civilian systems."
 
 
 def _order_why(article: Article) -> str:
@@ -201,8 +198,18 @@ def headline_is_raw(headline: str, title: str) -> bool:
     return False
 
 
+def _government_notice(article: Article) -> bool:
+    domain = (article.source_domain or "").lower()
+    title = (article.title or "").lower()
+    return "federalregister.gov" in domain or title.startswith("notice of order")
+
+
 def rewrite_headline(title: str) -> str:
     """A short lead that is not the raw page title."""
+    match = _ORDER_TITLE.search(title or "")
+    if match:
+        product = match.group(1).strip(" .")
+        return f"Order excludes and removes {product} from federal civilian systems."
     text = re.sub(
         r"^(exclusive|breaking|update|analysis)\s*:\s*",
         "",
@@ -255,23 +262,119 @@ def _restates(why: str, body: str) -> bool:
     return False
 
 
+_DANGLING_END = re.compile(
+    r"\b(?:a|an|the|to|of|for|and|or|be|as|with|from|by|its|their|into)\.$",
+    re.I,
+)
+
+
 def _usable_why(why: str, body: str, article: Article) -> str:
     """A consequence, or a definition. Never the selection-bar template."""
     order = _order_why(article)
-    candidate = (why or "").strip()
-    if is_criteria_echo(candidate) or is_filler_why(candidate):
-        candidate = _concrete_remainder(candidate)
-    echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
-    if order and (echoed or _restates(candidate, body)):
+    if order:
         return order
-    if candidate and not echoed and not _restates(candidate, body):
+    candidate = (why or "").strip()
+    if _DANGLING_END.search(candidate):
+        candidate = ""
+    if is_criteria_echo(candidate) or is_filler_why(candidate) or _SHORTFALL_WHY.search(candidate):
+        candidate = "" if _SHORTFALL_WHY.search(candidate) else _concrete_remainder(candidate)
+    echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
+    if candidate and not echoed and not _restates(candidate, body) and not _DANGLING_END.search(candidate):
         return candidate
     defined = _definition_why(article)
     if defined and not _restates(defined, body):
         return defined
-    if order:
-        return order
     return ""
+
+
+_MONEY_AMOUNT = re.compile(
+    r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:billion|million|bln|bn))?",
+    re.I,
+)
+_GLUED_AFTER_DATE = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|October|"
+    r"November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b\.?"
+    r"\s+\$\s?\d",
+    re.I,
+)
+_NUMBER_JOIN = re.compile(
+    r"\b(and|or|to|from|versus|vs\.?|but|while|reaching|heading|expected|expects|"
+    r"expect|toward|towards|plus|against|with|including|of|at|by|for|per|about|"
+    r"around|nearly|roughly|over|under|than|which)\b",
+    re.I,
+)
+_SHORTFALL_WHY = re.compile(
+    r"\b(revenue shortfall|shortfall|fell short|missed expectations|less than expected)\b",
+    re.I,
+)
+
+
+def has_unjoined_numbers(sentence: str) -> bool:
+    """True when two money figures were jammed together, or a date sits on the next figure.
+
+    'nearing $50 billion at the end of September $70 billion' is the failure:
+    the second figure has no joining word of its own.
+    """
+    text = sentence or ""
+    if _GLUED_AFTER_DATE.search(text):
+        return True
+    amounts = list(_MONEY_AMOUNT.finditer(text))
+    if len(amounts) < 2:
+        return False
+    for left, right in zip(amounts, amounts[1:]):
+        gap = text[left.end():right.start()]
+        if not _NUMBER_JOIN.search(gap):
+            return True
+    return False
+
+
+def _revenue_timeline(article: Article) -> str:
+    """Reuters' two figures, joined. Empty unless the source states both."""
+    source = f"{article.full_text or ''} {article.content_preview or ''}"
+    if not re.search(r"\$\s?50\s?billion", source, re.I):
+        return ""
+    if not re.search(r"\$\s?70\s?billion", source, re.I):
+        return ""
+    low = source.lower()
+    if "annualized" not in low or "september" not in low:
+        return ""
+    if not re.search(r"year-end|year end|end of the year", low):
+        return ""
+    sentence = (
+        "Annualized revenue was nearing $50 billion at the end of September, "
+        "and $70 billion is expected by year-end."
+    )
+    if not line_is_grounded(sentence, source, analysis=False):
+        return ""
+    return sentence
+
+
+def drop_unjoined_numbers(body: str, article: Article) -> str:
+    """Drop a jammed sentence and put the Reuters timeline back if the source has it."""
+    kept = [sentence for sentence in split_sentences(body or "") if not has_unjoined_numbers(sentence)]
+    text = " ".join(kept)
+    timeline = _revenue_timeline(article)
+    if not timeline:
+        return text
+    if "september" not in text.lower():
+        # "$50 billion in annualized revenue ... $70 billion by year-end" is missing the month.
+        spliced = re.sub(
+            r"(\$\s?50\s?billion)(\s+in\s+annualized\s+revenue)",
+            r"\1\2 at the end of September",
+            text,
+            count=1,
+            flags=re.I,
+        )
+        sentences = split_sentences(spliced)
+        if "september" in spliced.lower() and not any(has_unjoined_numbers(sentence) for sentence in sentences):
+            text = spliced
+        elif not re.search(r"\$\s?70\s?billion", text, re.I):
+            text = f"{text} {timeline}".strip()
+        else:
+            text = f"{text} {timeline}".strip()
+    elif not re.search(r"\$\s?70\s?billion", text, re.I):
+        text = f"{text} {timeline}".strip()
+    return text
 
 
 _EXPECTATION_CLAUSE = re.compile(
@@ -524,8 +627,8 @@ Return:
 {{"items": [{{"index": 0, "headline": "...", "body": "...", "why_it_matters": "..."}}]}}"""
 
 
-def _accept(line: str, article: Article, *, analysis: bool, fallback: str) -> str:
-    cleaned = clean_line(line)
+def _accept(line: str, article: Article, *, analysis: bool, fallback: str, limit: int = 220) -> str:
+    cleaned = clean_line(line, limit=limit)
     # Thin excerpts used to force the bare headline. Check the full source instead.
     if line_is_grounded(cleaned, _source_text(article), analysis=analysis):
         return cleaned
@@ -635,9 +738,9 @@ Public sources only. Do not mention a vendor's private customer list or unpublis
 A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press, or a Yahoo copy of that wire) over a roundup or a law-firm blog. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it, including on a vendor's own post.
 
 For each chosen item:
-- headline: a short rewritten lead, under 12 words, with the spec or the number (dollars, percent, parameter count, or date). Do not paste the page title. Not a bare version number and not a full paragraph.
-- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Do not write that a figure is "less than expected" or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, the consequence is that vendors must audit which models sit under their products. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write one sentence that names the product and the removal, and end it with a period.
+- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, the consequence is that vendors must audit which models sit under their products. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
@@ -861,8 +964,10 @@ def _grounded_body(body: str, article: Article) -> str:
 
 _CLEAR_BAR = re.compile(
     r"\b(exclusion|barred)\b|"
-    r"(?:raise|raises|raised|valuation|acqui\w*|funding).{0,48}\$\s?\d[\d.]*\s?(?:billion|bln)|"
-    r"\$\s?\d[\d.]*\s?(?:billion|bln).{0,48}(?:raise|valuation|acqui\w*|funding|deal)",
+    r"(?:raise|raises|raised|valuation|acqui\w*|funding|fundraising|loss).{0,48}\$\s?\d[\d.]*\s?(?:billion|bln)|"
+    r"\$\s?\d[\d.]*\s?(?:billion|bln).{0,48}(?:raise|valuation|acqui\w*|funding|fundraising|deal|loss|ipo)|"
+    r"\b(?:openai|anthropic)\b.{0,80}\b(?:fundraising|ipo)\b|"
+    r"\b(?:fundraising|ipo)\b.{0,80}\b(?:openai|anthropic)\b",
     re.I,
 )
 _DETAILS_LEAK = re.compile(r"\b(?:Prices|Benchmarks|Dates|Availability|Caveats)\s*:", re.I)
@@ -898,7 +1003,10 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         headline = _order_lead(article) or rewrite_headline(what or article.title)
         if headline_is_raw(headline, article.title) or len(headline.split()) > 12:
             headline = rewrite_headline(article.title)
-        body = label_benchmark(factual_body(article), article)
+        body = drop_unjoined_numbers(
+            strip_unverified_expectation(label_benchmark(factual_body(article), article), article),
+            article,
+        )
         if len(split_sentences(body)) < 2:
             continue
         why_line = _usable_why(why, body, article)
@@ -979,21 +1087,33 @@ def compose_briefing(
         what_fb, why_fb = extractive_lines(article)
         headline_raw = str(row.get("headline") or row.get("what_happened") or "")
         headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
-        if (
+        # A Federal Register notice is rewritten even when the model copies the title.
+        if _government_notice(article) or _order_lead(article):
+            headline = _order_lead(article) or rewrite_headline(article.title)
+        elif (
             headline_is_raw(headline, article.title)
             or len(headline.split()) > 12
             or _CHROME.search(headline)
         ):
-            headline = _order_lead(article) or rewrite_headline(article.title)
+            headline = rewrite_headline(article.title)
         elif len(headline) > 110:
             headline = _short_lead(headline, 110)
         if _CHROME.search(headline):
             headline = clean_line(_CHROME.sub("", headline))
-        body = strip_unverified_expectation(
-            label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
+        body = drop_unjoined_numbers(
+            strip_unverified_expectation(
+                label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
+                article,
+            ),
             article,
         )
-        why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback="")
+        why = _accept(
+            str(row.get("why_it_matters") or ""),
+            article,
+            analysis=True,
+            fallback="",
+            limit=380,
+        )
         body = _DETAILS_LEAK.split(body)[0].strip()
         why = _DETAILS_LEAK.split(why)[0].strip()
         body = _drop_repeated_why(body, why)
@@ -1017,7 +1137,9 @@ def compose_briefing(
     pairs = _backfill_clear_bar(articles, pairs, limit)
 
     combined = "\n".join(_source_text(row[0]) for row in pairs)
-    lede = fit_lede(clean_line(str(payload.get("lede") or ""), limit=320), since, until)
+    lede = fit_lede(clean_line(str(payload.get("lede") or ""), limit=420), since, until)
+    if _DANGLING_END.search(lede or ""):
+        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
     if not line_is_grounded(check or lede, combined, analysis=True):
         lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)

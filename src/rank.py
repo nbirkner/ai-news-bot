@@ -49,6 +49,14 @@ _PRERELEASE = re.compile(
 )
 _OFFICE = re.compile(r"\boffices?\b|\bnew hub\b", re.I)
 _TAX = re.compile(r"\b(tax hike|proposition \d+|income tax)\b", re.I)
+# A lab or an infrastructure deal. "AI" alone on a marketing acquisition is not one.
+_CLEAR_AI_DEAL = re.compile(
+    r"\b(openai|anthropic|deepseek|nvidia|mistral|minimax|gpt-\d|claude|"
+    r"\bllm\b|gpu|chip|inference|data center|datacenter|neocloud|"
+    r"foundation model|open[- ]weight)\b",
+    re.I,
+)
+_GENERIC_DEAL = re.compile(r"\b(acqui\w*|buys|buying|merger|to buy|deal)\b", re.I)
 _CUSTOMER = re.compile(
     r"^(?:How\s+)?[A-Z0-9][\w.&'-]*(?:\s+[A-Z0-9][\w.&'-]*){0,5}\s+"
     r"(?i:cuts|saves|uses|partners|brings|runs|deploys|takes|puts)\b"
@@ -94,6 +102,9 @@ def score_article(article) -> int:
         score += 4
     if _DEAL.search(title):
         score += 5
+        # A frontier-lab round outranks a generic $320 million financing.
+        if re.search(r"\b(openai|anthropic)\b", title, re.I):
+            score += 3
     if _AGENTS.search(title):
         score += 2
     if _OPEN_WEIGHTS.search(title) and not has_model:
@@ -178,6 +189,8 @@ def hard_noise(article) -> bool:
         return True
     if _TAX.search(title):
         return True
+    if _GENERIC_DEAL.search(title) and not _CLEAR_AI_DEAL.search(title):
+        return True
     return False
 
 
@@ -223,7 +236,7 @@ def shortlist_for_reading(articles: list, *, limit: int = 15) -> list:
 
     Hard noise is dropped. Keyword score is not a hard cutoff: a quiet
     headline still gets a slot when the high-score items do not fill the list.
-    One feed cannot take more than three of the score-ranked slots.
+    One feed cannot take more than five of the score-ranked slots.
     """
     pool = [article for article in articles if not hard_noise(article)]
     ranked = sorted(
@@ -247,7 +260,7 @@ def shortlist_for_reading(articles: list, *, limit: int = 15) -> list:
         return True
 
     for article in ranked:
-        add(article, cap=3)
+        add(article, cap=5)
         if len(chosen) >= limit:
             break
     if len(chosen) < limit:

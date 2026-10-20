@@ -323,6 +323,19 @@ def test_expectation_framing_drops_unless_the_wire_says_it():
     assert "$50 billion" in cleaned
 
 
+def test_a_lede_cut_off_mid_phrase_is_replaced():
+    from datetime import timedelta
+    from src.summarize import _DANGLING_END, fit_lede, theme_lede
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    until = since + timedelta(hours=27)
+    chopped = "Since Monday morning, Microsoft told enterprises to treat AI agents as."
+    assert _DANGLING_END.search(chopped)
+    article = _article("Microsoft says AI agents are insider threats", "Defender covers 60 agent types.")
+    lede = fit_lede(theme_lede([article]), since, until)
+    assert not _DANGLING_END.search(lede)
+    assert lede.endswith(".")
+
+
 def test_a_short_window_lede_does_not_say_this_week():
     from datetime import timedelta
     from src.summarize import fit_lede
@@ -331,6 +344,79 @@ def test_a_short_window_lede_does_not_say_this_week():
     lede = fit_lede("This week brings a federal order and a funding round.", since, until)
     assert lede.startswith("Since Monday morning")
     assert "this week" not in lede.lower()
+
+
+def test_a_truncated_why_does_not_ship():
+    from src.summarize import _usable_why
+    article = _article("Otter.ai raises $320 million", "Otter closed the round.", kind="news")
+    chopped = "The repayable structure will test whether meeting transcription can be a."
+    assert _usable_why(chopped, "Otter closed a $320 million round.", article) != chopped
+    assert not (_usable_why(chopped, "Otter closed a $320 million round.", article) or "").endswith(" a.")
+
+
+def test_syndication_search_drops_the_exclusive_label():
+    from src.read import syndication_queries
+    queries = syndication_queries(
+        "EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say"
+    )
+    assert queries
+    assert "EXCLUSIVE" not in queries[0]
+    assert "OpenAI seeks to accelerate fundraising" in queries[0]
+
+
+def test_a_401_uses_the_same_fallback_as_a_403():
+    from requests import HTTPError
+    from src.read import _access_denied
+
+    class Response:
+        status_code = 401
+
+    denied = HTTPError("401 Client Error: Unauthorized")
+    denied.response = Response()
+    assert _access_denied(denied)
+    blocked = HTTPError("403 Client Error: Forbidden")
+    blocked.response = Response()
+    blocked.response.status_code = 403
+    assert _access_denied(blocked)
+
+
+def test_unjoined_money_figures_are_rejected_and_the_timeline_is_restored():
+    from src.summarize import drop_unjoined_numbers, has_unjoined_numbers, _usable_why
+    garbled = (
+        "OpenAI's annualized revenue was nearing $50 billion at the end of September $70 billion."
+    )
+    assert has_unjoined_numbers(garbled)
+    joined = (
+        "Annualized revenue was nearing $50 billion at the end of September, "
+        "and $70 billion is expected by year-end."
+    )
+    assert not has_unjoined_numbers(joined)
+    article = _article(
+        "OpenAI races to raise $30 billion",
+        "Reuters reported the figures.",
+        kind="news",
+    )
+    article.source_domain = "reuters.com"
+    article.full_text = (
+        "OpenAI's annualized revenue was nearing $50 billion at the end of September. "
+        "The company expects annualized revenue of $70 billion by year-end."
+    )
+    cleaned = drop_unjoined_numbers(garbled, article)
+    assert "September $" not in cleaned
+    assert "$50 billion" in cleaned and "$70 billion" in cleaned
+    assert " and " in cleaned
+    partial = (
+        "OpenAI is pitching a round of about $30 billion. "
+        "It had reached $50 billion in annualized revenue and expects $70 billion by year-end."
+    )
+    restored = drop_unjoined_numbers(partial, article)
+    assert "end of September" in restored
+    assert "$30 billion" in restored
+    from src.clean import split_sentences
+    assert all(not has_unjoined_numbers(sentence) for sentence in split_sentences(restored))
+    shortfall = "The revenue shortfall changes how the round is priced."
+    assert _usable_why(shortfall, cleaned, article) != shortfall
+    assert "shortfall" not in (_usable_why(shortfall, cleaned, article) or "").lower()
 
 
 def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
@@ -344,6 +430,9 @@ def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
     lead = _order_lead(article)
     why = _order_why(article)
     assert lead.startswith("Order excludes and removes DeepSeek Products")
+    assert lead.endswith(".")
+    assert lead != title
+    assert "Notice of Order" not in lead
     article.full_text = (
         "The order removes DeepSeek products and third-party products developed "
         "using DeepSeek from civilian agency information technology."
@@ -351,6 +440,9 @@ def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
     why = _order_why(article)
     assert "audit" in why.lower()
     assert "bring up" not in why
+    from src.summarize import _usable_why
+    paraphrase = "Vendors selling into federal agencies must check every product they offer."
+    assert _usable_why(paraphrase, "The order removes the products.", article) == why
 
 
 def test_a_cost_cut_is_not_labeled_as_a_benchmark():

@@ -47,6 +47,22 @@ def test_a_hacking_headline_stays_under_the_bar():
     assert score_article(article("AI agents are hacking John Deere equipment")) < 6
 
 
+def test_a_frontier_round_outranks_a_generic_financing():
+    lab_round = article("OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say")
+    generic = article("Otter.ai raises $320 million in non-equity financing to expand enterprise business")
+    loss = article("Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports")
+    scrutiny = article("Governments, regulators increase scrutiny of China's DeepSeek")
+    assert score_article(lab_round) > score_article(generic)
+    assert score_article(loss) > score_article(scrutiny)
+
+
+def test_a_generic_enterprise_deal_is_not_an_ai_story():
+    braze = article("Salesforce deepens AI bets with a $5.66 billion Braze deal")
+    assert hard_noise(braze)
+    orchestra = article("OpenAI acquires Orchestra Bio")
+    assert not hard_noise(orchestra)
+
+
 def test_a_tax_commentary_is_not_a_story():
     assert hard_noise(article("As billionaires fight a tax hike, a cofounder says he will pay $8 billion"))
 

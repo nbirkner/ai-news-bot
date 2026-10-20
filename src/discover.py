@@ -6,7 +6,13 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.dedupe import canonical_url, dedupe_articles, event_already_happened, same_underlying_event
+from src.dedupe import (
+    canonical_url,
+    dedupe_articles,
+    event_already_happened,
+    round_already_announced,
+    same_underlying_event,
+)
 from src.rank import is_low_trust
 from src.exa_search import ExaBudget, resolve_cap, search_queries
 from src.fetch import fetch_all
@@ -82,11 +88,12 @@ def prepare_candidates(
         pass
 
     combined = list(report.articles) + list(exa_articles)
+    prior = list(getattr(report, "prior", None) or [])
     fresh = []
     for article in combined:
         if canonical_url(article.url) in seen:
             continue
-        if event_already_happened(article, since):
+        if event_already_happened(article, since) or round_already_announced(article, prior, since):
             print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
             continue
         if _already_posted(article, recent_items):
@@ -95,6 +102,9 @@ def prepare_candidates(
         if is_low_trust(article):
             article.source_priority = max(article.source_priority, 5)
         fresh.append(article)
+    if config.get("read_full_text"):
+        from src.read import fill_denied_stubs
+        fill_denied_stubs(fresh)
     result.fresh = fresh
     result.pool = dedupe_articles(fresh)
     limit = int(config.get("read_candidates", 15))

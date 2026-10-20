@@ -179,6 +179,16 @@ def _blocked_host(url: str) -> bool:
     return any(host == bit or host.endswith("." + bit) for bit in _BLOCKED_HOSTS)
 
 
+def _access_denied(exc: BaseException) -> bool:
+    """A bot block. 401 and 403 take the same fallback path."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status in (401, 403):
+        return True
+    text = str(exc)
+    return "401" in text or "403" in text
+
+
 def _syndication_label(url: str) -> str:
     host = _host(url)
     if "yahoo" in host:
@@ -195,46 +205,67 @@ def _syndication_host(url: str) -> bool:
     return any(host == bit or host.endswith("." + bit) for bit in _SYNDICATION_HOSTS)
 
 
-def syndication_text(title: str, original_url: str = "") -> tuple:
-    """Readable wire copy when the primary page returns 403. (text, url)."""
-    from src.fetch import decode_google_news_url
-    cleaned = " ".join((title or "").split())
-    if len(cleaned) < 12:
-        return "", ""
-    query = (
-        f"\"{cleaned}\" (site:finance.yahoo.com OR site:news.yahoo.com "
+def syndication_queries(title: str) -> list:
+    """Quoted searches for a wire. The EXCLUSIVE label is not on the reprint."""
+    text = re.sub(
+        r"^(exclusive|breaking|update|analysis)\s*:\s*",
+        "",
+        " ".join((title or "").split()),
+        flags=re.I,
+    )
+    text = re.sub(r",\s*sources say\s*$", "", text, flags=re.I).strip()
+    titles = []
+    if len(text) >= 12:
+        titles.append(text)
+    words = text.split()
+    if len(words) > 8:
+        short = " ".join(words[:8])
+        if short not in titles and len(short) >= 12:
+            titles.append(short)
+    sites = (
+        "(site:finance.yahoo.com OR site:news.yahoo.com "
         "OR site:pymnts.com OR site:marketscreener.com)"
     )
-    try:
-        raw = http_get(
-            "https://news.google.com/rss/search",
-            params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
-        ).content
-    except Exception as exc:
-        print(f"Warning: syndication search failed: {exc}", file=sys.stderr)
+    return [f"\"{item}\" {sites}" for item in titles]
+
+
+def syndication_text(title: str, original_url: str = "") -> tuple:
+    """Readable wire copy when the primary page returns 401 or 403. (text, url)."""
+    from src.fetch import decode_google_news_url
+    queries = syndication_queries(title)
+    if not queries:
         return "", ""
     import feedparser
-    feed = feedparser.parse(raw)
     origin = _host(original_url)
-    for entry in feed.entries[:4]:
-        link = entry.get("link") or ""
-        if "news.google.com" not in link:
-            continue
+    for query in queries:
         try:
-            url = decode_google_news_url(link)
+            raw = http_get(
+                "https://news.google.com/rss/search",
+                params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            ).content
         except Exception as exc:
-            print(f"Warning: syndication decode failed: {exc}", file=sys.stderr)
+            print(f"Warning: syndication search failed: {exc}", file=sys.stderr)
             continue
-        if not url or not _syndication_host(url) or _host(url) == origin:
-            continue
-        try:
-            page = http_get(url).text
-        except Exception as exc:
-            print(f"Warning: syndication fetch failed for {url}: {exc}", file=sys.stderr)
-            continue
-        text = extract_html_text(page)
-        if len(text) >= 400:
-            return text[:12000], url
+        feed = feedparser.parse(raw)
+        for entry in feed.entries[:4]:
+            link = entry.get("link") or ""
+            if "news.google.com" not in link:
+                continue
+            try:
+                url = decode_google_news_url(link)
+            except Exception as exc:
+                print(f"Warning: syndication decode failed: {exc}", file=sys.stderr)
+                continue
+            if not url or not _syndication_host(url) or _host(url) == origin:
+                continue
+            try:
+                page = http_get(url).text
+            except Exception as exc:
+                print(f"Warning: syndication fetch failed for {url}: {exc}", file=sys.stderr)
+                continue
+            text = extract_html_text(page)
+            if len(text) >= 400:
+                return text[:12000], url
     return "", ""
 
 
@@ -271,6 +302,42 @@ def _reader_text(url: str) -> str:
     return collapse_ws(raw)
 
 
+def _apply_fallback(article) -> None:
+    """Syndication, then the Google cache, then the RSS description.
+
+    A Reuters page that 401s keeps the Reuters label when a Yahoo copy is
+    readable, so it still beats a PYMNTS recap of the same wire.
+    """
+    origin = _host(article.url)
+    extra, via = syndication_text(article.title, article.url)
+    if len(extra) > len(article.full_text or ""):
+        article.full_text = extra
+        if via and "reuters.com" not in origin:
+            article.url = via
+            article.source_domain = _host(via)
+            article.source_name = _syndication_label(via)
+        elif via:
+            article.url = via
+        return
+    cached = _cache_text(article.url)
+    if len(cached) > len(article.full_text or ""):
+        article.full_text = cached
+        return
+    preview = article.content_preview or ""
+    if len(preview) > len(article.full_text or ""):
+        article.full_text = preview
+
+
+def fill_denied_stubs(articles) -> None:
+    """Read a syndication copy before dedupe, so a 401 stub cannot win."""
+    for article in articles:
+        if len(article.full_text or "") >= 400:
+            continue
+        if not (_blocked_host(article.url) or (_paywalled(article.url) and _blocked_host(article.url))):
+            continue
+        _apply_fallback(article)
+
+
 def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None, getter=None, contents=None) -> None:
     """Fill full_text and details in place. Failures stay on the preview."""
     live_fetch = getter is None
@@ -278,6 +345,10 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
     contents = contents or fetch_contents
     for article in articles:
         if len(article.full_text or "") >= 400:
+            continue
+        # Reuters 401s a direct GET. Syndication is the read, same as a 403.
+        if live_fetch and _blocked_host(article.url) and _paywalled(article.url):
+            _apply_fallback(article)
             continue
         if _paywalled(article.url):
             continue
@@ -289,21 +360,8 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
             raw = getter(target)
         except Exception as exc:
             print(f"Warning: full text fetch failed for {article.url}: {exc}", file=sys.stderr)
-            if live_fetch and _blocked_host(article.url) and ("403" in str(exc) or "401" in str(exc)):
-                extra, via = syndication_text(article.title, article.url)
-                if len(extra) > len(article.full_text or ""):
-                    article.full_text = extra
-                    if via:
-                        article.url = via
-                        article.source_domain = _host(via)
-                        article.source_name = _syndication_label(via)
-                else:
-                    cached = _cache_text(article.url)
-                    preview = article.content_preview or ""
-                    if len(cached) > len(article.full_text or ""):
-                        article.full_text = cached
-                    elif len(preview) > len(article.full_text or ""):
-                        article.full_text = preview
+            if live_fetch and _blocked_host(article.url) and _access_denied(exc):
+                _apply_fallback(article)
             continue
         if not raw:
             continue
@@ -316,6 +374,9 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
         host = urlparse(article.url).netloc.lower()
         if host.startswith("www."):
             host = host[4:]
+        if _blocked_host(article.url):
+            # Jina answers 401 here. The syndication chain already ran.
+            continue
         if not any(host == bit or host.endswith("." + bit) for bit in _READER_HOSTS):
             continue
         extra = _reader_text(article.url)

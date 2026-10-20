@@ -191,6 +191,28 @@ def same_underlying_event(article, other_title: str) -> bool:
     return bool(_actors(blob) & _actors(other_title or ""))
 
 
+_ROUND_WORD = re.compile(
+    r"\b(raise|raises|raised|raising|valuation|funding|series [a-e])\b",
+    re.I,
+)
+_ROUND_SKIP = {
+    "billion", "million", "valuation", "funding", "raises", "raised", "raising",
+    "round", "series", "startup", "company", "capital", "chips",
+}
+
+
+def _same_company_round(left, right) -> bool:
+    """One company's round, even when a later writeup changes the verb."""
+    if not _ROUND_WORD.search(left.title or "") or not _ROUND_WORD.search(right.title or ""):
+        return False
+    shared = {
+        word
+        for word in set(tokens(left.title)) & set(tokens(right.title))
+        if len(word) >= 6 and word not in _ROUND_SKIP
+    }
+    return bool(shared)
+
+
 def same_story(left, right) -> bool:
     if canonical_url(left.url) == canonical_url(right.url):
         return True
@@ -200,7 +222,33 @@ def same_story(left, right) -> bool:
         _same_named_event(left, right, _MONEY_EVENT)
         or _same_named_event(left, right, _POLICY_EVENT)
         or _same_acquisition(left, right)
+        or _same_company_round(left, right)
     )
+
+
+def round_already_announced(article, prior, since) -> bool:
+    """A later writeup of a round that was already announced before the window."""
+    if since is None or not prior:
+        return False
+    if "federalregister.gov" in (article.source_domain or ""):
+        return False
+    if article.source_kind in {"lab", "release"}:
+        return False
+    if not _ROUND_WORD.search(article.title or ""):
+        return False
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    for old in prior:
+        published = getattr(old, "published_at", None)
+        if published is None:
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        if published >= since:
+            continue
+        if same_story(article, old):
+            return True
+    return False
 
 
 _SIGNATURE = re.compile(
@@ -225,13 +273,33 @@ def _readable(article) -> bool:
     return len(preview) >= 180 and preview != title
 
 
+def _wire_rank(article) -> int:
+    """Lower wins. Reuters, then its Yahoo copy, then everyone else, then PYMNTS."""
+    blob = f"{article.source_domain or ''} {article.source_name or ''}".lower()
+    if "reuters" in blob:
+        return 0
+    if "yahoo" in blob:
+        return 1
+    if "pymnts" in blob:
+        return 4
+    return 2
+
+
+def _official_record(article) -> bool:
+    """The Federal Register is the order. A wire recap is not."""
+    return "federalregister.gov" in (article.source_domain or "")
+
+
 def _prefer(candidate, current) -> bool:
     """Whether candidate should replace current for the same event.
 
-    A lab post wins over a recap. Between two news copies, a readable
-    syndication wins over a wire stub whose page returned 403.
+    A lab post or the Federal Register wins over a recap. Between two
+    news copies, a readable syndication wins over a wire stub whose page
+    returned 401 or 403, and Reuters wins over PYMNTS.
     """
     def primary(article) -> bool:
+        if _official_record(article):
+            return True
         return article.source_kind in {"lab", "release"} and article.source_priority <= 2
 
     cand_primary = primary(candidate)
@@ -242,6 +310,9 @@ def _prefer(candidate, current) -> bool:
     curr_read = _readable(current)
     if cand_read != curr_read:
         return cand_read
+    # A readable Reuters wire beats a PYMNTS recap of the same story.
+    if _wire_rank(candidate) != _wire_rank(current):
+        return _wire_rank(candidate) < _wire_rank(current)
     if candidate.source_priority != current.source_priority:
         return candidate.source_priority < current.source_priority
     cand_len = len(candidate.full_text or "") + len(candidate.content_preview or "")
@@ -254,7 +325,7 @@ def dedupe_articles(articles: list) -> list:
     ordered = sorted(
         articles,
         key=lambda article: (
-            0 if article.source_kind in {"lab", "release"} else 1,
+            0 if article.source_kind in {"lab", "release"} or _official_record(article) else 1,
             article.source_priority,
             -len(article.full_text or ""),
             -len(article.content_preview or ""),

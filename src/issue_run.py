@@ -85,6 +85,7 @@ def _also_titles(items: list, shortlist: list, limit: int = 8) -> tuple:
         if canonical_url(article.url) in chosen:
             continue
         title = (article.title or "").strip()
+        title = title.replace("\u2014", ", ").replace("\u2013", ", ").replace("—", ", ").replace("–", ", ")
         if not title or not AI_TERMS.search(title):
             continue
         if any(jaccard(title, previous) >= 0.45 for previous in chosen_titles + extras):

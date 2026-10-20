@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -45,3 +45,4 @@ class FetchReport:
     articles: list
     failures: list
     successes: int
+    prior: list = field(default_factory=list)
