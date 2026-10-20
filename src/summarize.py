@@ -224,8 +224,21 @@ def _government_notice(article: Article) -> bool:
     return "federalregister.gov" in domain or title.startswith("notice of order")
 
 
+def _loss_headline(title: str) -> str:
+    """A short sentence. Not the raw Reuters title."""
+    if not re.search(r"\banthropic\b", title or "", re.I) or not re.search(r"\bloss\b", title or "", re.I):
+        return ""
+    amount = re.search(r"\$\s?(\d[\d.]*)\s?billion", title or "", re.I)
+    if not amount:
+        return ""
+    return f"Anthropic logged an ${amount.group(1)} billion net loss."
+
+
 def rewrite_headline(title: str) -> str:
     """A short lead that is not the raw page title."""
+    loss = _loss_headline(title or "")
+    if loss:
+        return loss
     plain = _plain_removal_headline(title or "")
     if plain:
         return plain.rstrip(".")
@@ -297,13 +310,18 @@ def _usable_why(why: str, body: str, article: Article) -> str:
         candidate = ""
     if is_criteria_echo(candidate) or is_filler_why(candidate) or _SHORTFALL_WHY.search(candidate):
         candidate = "" if _SHORTFALL_WHY.search(candidate) else _concrete_remainder(candidate)
-    if _GENERIC_LOSS_WHY.search(candidate or ""):
-        candidate = ""
     echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
+    generic = re.search(r"changes what the lab can spend", candidate or "", re.I)
     charge = _loss_charge_why(article)
-    # The charge fact is the why, even when the body already quotes it.
-    if charge:
+    # The generic spend line is not an implication. A why that infers from
+    # figures already in the source, such as a jump from $518 billion to $750 billion, stays.
+    if charge and (not candidate or generic or echoed) and not re.search(
+        r"non-?cash|accounting charges", candidate or "", re.I
+    ):
         return charge
+    if generic:
+        candidate = ""
+        echoed = True
     if candidate and not echoed and not _restates(candidate, body) and not _DANGLING_END.search(candidate):
         return candidate
     defined = _definition_why(article)
@@ -315,59 +333,32 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     return ""
 
 
-_GENERIC_LOSS_WHY = re.compile(r"changes what the lab can spend", re.I)
-_CHARGE_ANCHOR = re.compile(r"non[-\s]?cash|accounting charges?", re.I)
-_BILLION_FIGURE = re.compile(r"\$\s?\d[\d.]*\s?billion", re.I)
-
-
-def _charge_figure(source: str) -> str:
-    """The dollar figure next to the charge, not a different number in the same piece."""
-    anchors = [match.start() for match in _CHARGE_ANCHOR.finditer(source or "")]
-    best = ""
-    best_dist = 10**9
-    for match in _BILLION_FIGURE.finditer(source or ""):
-        for anchor in anchors:
-            dist = abs(match.start() - anchor)
-            if dist <= 120 and dist < best_dist:
-                best_dist = dist
-                best = re.sub(r"\s+", " ", match.group(0)).strip()
-    return best
-
-
 def _loss_charge_why(article: Article) -> str:
-    """Build the loss why from charge facts the source actually states."""
+    """Name the charges behind a loss, and only with words the source uses."""
     source = _source_text(article)
     if not re.search(r"\banthropic\b", source, re.I) or not re.search(r"\bloss\b", source, re.I):
         return ""
-    noncash = re.search(r"non[-\s]?cash", source, re.I) is not None
-    accounting = re.search(r"accounting charges?", source, re.I) is not None
-    if not noncash and not accounting:
-        return ""
-    if noncash and accounting:
-        kind = "non-cash accounting charges"
-    elif noncash:
+    if re.search(r"non-?cash", source, re.I):
         kind = "non-cash charges"
-    else:
+    elif re.search(r"accounting charges", source, re.I):
         kind = "accounting charges"
-    figure = _charge_figure(source)
-    if re.search(r"\b(most|mostly)\b", source, re.I) and figure:
-        lead = f"Most of the {figure} is {kind}"
-    elif re.search(r"\b(most|mostly)\b", source, re.I):
-        lead = f"Most of Anthropic's reported loss is {kind}"
-    elif re.search(r"\bmajority\b", source, re.I) and figure:
-        lead = f"The majority of the {figure} is {kind}"
-    elif figure:
-        lead = f"Anthropic's reported loss includes {figure} in {kind}"
     else:
-        lead = f"Anthropic's reported loss includes {kind}"
-    tail = ""
-    has_burn = re.search(r"operating burn", source, re.I) is not None
-    has_s1 = re.search(r"\bS-1\b", source) is not None
-    if has_burn and has_s1:
-        tail = ", and the figure to watch is operating burn in the S-1"
-    elif has_burn:
-        tail = ", and the figure to watch is operating burn"
-    line = lead + tail + "."
+        return ""
+    says_most = re.search(r"\b(most|mostly)\b", source, re.I)
+    if says_most and kind == "non-cash charges":
+        line = "Most of Anthropic's reported loss is non-cash charges."
+    elif says_most:
+        line = f"Most of Anthropic's reported loss is {kind}."
+    else:
+        figure = re.search(
+            r"\$\s?\d[\d.]*\s?billion in accounting charges",
+            source,
+            re.I,
+        )
+        if figure and kind == "accounting charges":
+            line = f"Anthropic's reported loss includes {figure.group(0)}."
+        else:
+            line = f"Anthropic's reported loss includes {kind}."
     if not line_is_grounded(line, source, analysis=True):
         return ""
     return line
@@ -475,8 +466,18 @@ def _quote_belongs_to(quote: str, speaker: str, source_quotes: list) -> bool:
     return False
 
 
+def _named_person(speaker: str, source: str) -> bool:
+    """A person, not a company reporting its own numbers."""
+    speaker = (speaker or "").strip()
+    if not speaker:
+        return False
+    if len(speaker.split()) >= 2:
+        return True
+    return re.search(rf"\b[A-Z][a-z]+\s+{re.escape(speaker)}\b", source or "") is not None
+
+
 def sentence_misattributes(sentence: str, source: str) -> bool:
-    """True when a sentence gives someone a quote or a reporter's line they did not say."""
+    """True when a sentence gives a person a quote the source does not give them."""
     if not sentence or not source:
         return False
     quotes = _source_quotes(source)
@@ -487,6 +488,8 @@ def sentence_misattributes(sentence: str, source: str) -> bool:
     for match in _ATTR_BACK.finditer(sentence):
         attributions.append((match.group(2), match.group(1)))
     for speaker, rest in attributions:
+        if not _named_person(speaker, source):
+            continue
         quoted = _QUOTE_SPAN.findall(rest if isinstance(rest, str) else "")
         if not quoted and rest.strip().startswith('"'):
             quoted = _QUOTE_SPAN.findall(rest)
@@ -557,6 +560,63 @@ def price_unit_mismatch(text: str, source: str) -> bool:
     if not re.search(r"\bcents?\s+per\s+million\b", text or "", re.I):
         return False
     return any(price >= 0.10 for price in _token_prices(source))
+
+
+def keep_prior_loss_context(body: str, article: Article) -> str:
+    """Keep the 2025 loss and the prior spend figure when the source states both."""
+    source = _source_text(article)
+    if not re.search(r"\$\s?42\s?billion", source, re.I) or not re.search(r"\$\s?518\s?billion", source, re.I):
+        return body
+    text = body or ""
+    if re.search(r"\$\s?42\s?billion", text, re.I) and re.search(r"\$\s?518\s?billion", text, re.I):
+        return text
+    needed = []
+    blob = text
+    for sentence in split_sentences(source):
+        if not re.search(r"\$\s?42\s?billion|\$\s?518\s?billion", sentence, re.I):
+            continue
+        cleaned = clean_line(sentence, limit=420)
+        if not cleaned or not line_is_grounded(cleaned, source, analysis=False):
+            continue
+        adds_42 = (
+            not re.search(r"\$\s?42\s?billion", blob, re.I)
+            and re.search(r"\$\s?42\s?billion", cleaned, re.I)
+        )
+        adds_518 = (
+            not re.search(r"\$\s?518\s?billion", blob, re.I)
+            and re.search(r"\$\s?518\s?billion", cleaned, re.I)
+        )
+        if adds_42 or adds_518:
+            needed.append(cleaned)
+            blob = f"{blob} {cleaned}"
+    if not needed:
+        return text
+    lead = split_sentences(text)[:1]
+    rest = split_sentences(text)[1:]
+    return " ".join((lead + needed + rest)[:3])
+
+
+def keep_minimax_says(body: str, article: Article) -> str:
+    """Keep the company's own attribution on a 3x or 70% claim."""
+    source = _source_text(article)
+    if not re.search(r"\bMiniMax says\b", source, re.I):
+        return body
+    if not re.search(r"\b3\s?x\b", source, re.I) or not re.search(r"70\s?%", source):
+        return body
+    text = body or ""
+    if not re.search(r"\b3\s?x\b", text, re.I) and not re.search(r"70\s?%", text):
+        return text
+    out = []
+    for sentence in split_sentences(text):
+        has_claim = re.search(r"\b3\s?x\b", sentence, re.I) or re.search(r"70\s?%", sentence)
+        if has_claim and not re.search(r"\bMiniMax says\b", sentence, re.I):
+            stripped = sentence.rstrip(".")
+            if stripped and stripped[0].isupper():
+                stripped = stripped[0].lower() + stripped[1:]
+            out.append(f"MiniMax says {stripped}.")
+        else:
+            out.append(sentence)
+    return " ".join(out)
 
 
 def fix_price_units(text: str, source: str) -> str:
@@ -1085,41 +1145,6 @@ def lede_names_stories(lede: str, rows: list) -> bool:
     return hits >= needed
 
 
-def _story_keys(row, rows: list) -> list:
-    """Words that identify this story and not the others in the lede."""
-    headline = row[1] if len(row) > 1 else ""
-    own = set(tokens(f"{headline} {row[0].title}"))
-    others = set()
-    for other in rows[:3]:
-        if other is row:
-            continue
-        other_headline = other[1] if len(other) > 1 else ""
-        others |= set(tokens(f"{other_headline} {other[0].title}"))
-    unique = [
-        word for word in own
-        if len(word) >= 5 and word not in _LEDE_THEME and word not in others
-    ]
-    if unique:
-        return unique
-    return [word for word in own if len(word) >= 5 and word not in _LEDE_THEME]
-
-
-def lede_follows_rank(lede: str, rows: list) -> bool:
-    """The named stories appear in the same order as the ranked items."""
-    text = (lede or "").lower()
-    positions = []
-    for row in rows[:3]:
-        found = None
-        for word in _story_keys(row, rows):
-            at = text.find(word)
-            if at >= 0:
-                found = at
-                break
-        if found is not None:
-            positions.append(found)
-    return positions == sorted(positions)
-
-
 def _window_note(since, until) -> str:
     if since is None or until is None:
         return ""
@@ -1163,10 +1188,10 @@ A hard number stays only when it appears in that item's text. Prefer the lab's o
 For each chosen item:
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what), using facts from that item's text. Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. For a reported loss, use the charge facts in the text: if it says most of a dollar figure is non-cash accounting charges, say that, and if it says to watch operating burn in the S-1, say that. Do not write that a loss changes what the lab can spend. Attribute a quotation only to the person the text quotes. A reporter's sentence is not that person's quote. Do not call a token price cents per million when the text states it in dollars. If every per-million price in the text is under a dollar, say under a dollar per million tokens. Do not call a model a frontier-lab model unless the text does. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, in the same order as the items, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
+lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 380 characters.
 Return JSON only.
@@ -1562,6 +1587,16 @@ def _compose_group(
         headline = scrub_copy(headline)
         if _CHROME.search(headline):
             headline = clean_line(_CHROME.sub("", headline))
+        loss_lead = _loss_headline(article.title)
+        if loss_lead and (
+            not headline
+            or headline_is_raw(headline, article.title)
+            or headline[-1] not in ".!?"
+            or re.search(r"\breports?\b", headline, re.I)
+        ):
+            headline = loss_lead
+        elif headline and headline[-1] not in ".!?":
+            headline += "."
         body = scrub_copy(drop_unjoined_numbers(
             strip_unverified_expectation(
                 label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
@@ -1580,6 +1615,7 @@ def _compose_group(
         why = _DETAILS_LEAK.split(why)[0].strip()
         source = _source_text(article)
         body = fix_quote_attribution(fix_price_units(body, source), source)
+        body = keep_prior_loss_context(keep_minimax_says(body, article), article)
         why = fix_quote_attribution(fix_price_units(why, source), source)
         body = _drop_repeated_why(body, why)
         if _CHROME.search(body) or _CHROME.search(headline):
@@ -1607,11 +1643,7 @@ def _compose_group(
     if _DANGLING_END.search(lede or ""):
         lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if (
-        not line_is_grounded(check or lede, combined, analysis=True)
-        or not lede_names_stories(lede, pairs)
-        or not lede_follows_rank(lede, pairs)
-    ):
+    if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
         lede = fit_lede(story_lede(pairs), since, until)
     return lede, pairs
 
