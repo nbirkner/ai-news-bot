@@ -356,7 +356,7 @@ def test_compose_ranks_from_full_text_and_checks_facts(monkeypatch):
             items.append({
                 "index": by_title[deep],
                 "headline": "DeepSeek released DeepSeek-V4.1-Flash-1017 as open weights.",
-                "why_it_matters": "Serving stacks have a new open checkpoint to evaluate.",
+                "why_it_matters": "DeepSeek gives serving stacks a new open checkpoint to evaluate.",
             })
         if ten:
             items.append({

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from src.models import Article
-from src.rank import hard_noise, score_article, select_items
+from src.rank import hard_noise, is_mega_order, score_article, select_items
 
 
 def article(title, *, kind="news", url="https://example.com/a", source="Example", hours=10):
@@ -55,6 +55,8 @@ def test_a_lab_loss_and_a_nscale_deal_outrank_llm_d():
     assert score_article(loss) > score_article(llmd)
     assert score_article(nscale) > score_article(llmd)
     assert score_article(chips) > score_article(llmd)
+    assert is_mega_order(chips)
+    assert not is_mega_order(nscale)
 
 
 def test_a_frontier_round_outranks_a_generic_financing():

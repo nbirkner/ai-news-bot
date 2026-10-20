@@ -28,8 +28,8 @@ _INFRA = re.compile(
 _MEGA_ORDER = re.compile(
     r"\b(?:bytedance|alibaba|tencent)\b.{0,120}\bnvidia\b|"
     r"\bnvidia\b.{0,120}\b(?:bytedance|alibaba|tencent)\b|"
-    r"\$\s?\d{2,}[\d.]*\s?(?:billion|bln).{0,60}\bnvidia\b|"
-    r"\bnvidia\b.{0,60}\$\s?\d{2,}[\d.]*\s?(?:billion|bln)",
+    r"\border\w*\b.{0,80}\$\s?\d{2,}[\d.]*\s?(?:billion|bln).{0,40}\bnvidia\b|"
+    r"\bnvidia\b.{0,40}\b(?:chip|chips)\b.{0,40}\$\s?\d{2,}[\d.]*\s?(?:billion|bln)",
     re.I,
 )
 _LAB_MONEY = re.compile(

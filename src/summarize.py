@@ -11,6 +11,7 @@ from src.clean import (
     first_sentence,
     is_thin_preview,
     line_is_grounded,
+    number_in_source,
     scrub_copy,
     shares_distinctive_word,
     split_sentences,
@@ -25,6 +26,9 @@ TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
 # and give each attempt a longer read timeout than the last.
 _RANK_BATCH = 8
 _READ_TIMEOUTS = (180, 240, 300)
+# Together accepts temperature 0 (greedy) and an integer seed. The seed is
+# best-effort across replicas, so a 400 that names seed is retried without it.
+_TOGETHER_SEED = 7
 
 # GLM-5.3 always thinks, and the trace shares this budget with the answer.
 # Default effort is "max". `reasoning: {enabled: false}` is ignored (HTTP 200),
@@ -298,6 +302,71 @@ _DANGLING_END = re.compile(
     r"\b(?:a|an|the|to|of|for|and|or|be|as|with|from|by|its|their|into)\.$",
     re.I,
 )
+# First hit in the title is the story's lead. A why for Nscale must say
+# Nscale, even when the title also says Nvidia.
+_LEAD_NAMES = (
+    "nscale", "minimax", "guardian", "bytedance", "deepseek",
+    "anthropic", "openai", "microsoft", "nvidia", "alibaba", "tencent",
+)
+_GARBLED_WHY = re.compile(
+    r"^(?:since|because|although|which|that)\b|"
+    r"\bsince the scores are company-reported\b",
+    re.I,
+)
+
+
+def _garbled_why(why: str) -> bool:
+    """A fragment is not a why-line. 'since the scores are company-reported' is one."""
+    return bool(_GARBLED_WHY.search((why or "").strip()))
+
+
+def story_lead(article: Article) -> str:
+    title = (getattr(article, "title", "") or "").lower()
+    for name in _LEAD_NAMES:
+        if re.search(rf"\b{name}\b", title):
+            return name
+    return ""
+
+
+def _entities_in(text: str) -> set:
+    low = (text or "").lower()
+    return {name for name in _LEAD_NAMES if re.search(rf"\b{name}\b", low)}
+
+
+def _same_article(left: Article, right: Article) -> bool:
+    if left is right:
+        return True
+    return bool(getattr(left, "url", "") and left.url == getattr(right, "url", ""))
+
+
+def why_matches_story(why: str, article: Article, siblings=None) -> bool:
+    """The why names this story's lead, and not another story's company or product."""
+    text = why or ""
+    if not text.strip():
+        return False
+    lead = story_lead(article)
+    named = _entities_in(text)
+    if lead and lead not in named:
+        return False
+    own = _entities_in(f"{article.title or ''} {_source_text(article)}")
+    for sibling in siblings or []:
+        if _same_article(sibling, article):
+            continue
+        foreign = _entities_in(getattr(sibling, "title", "") or "") - own
+        if named & foreign:
+            return False
+    return True
+
+
+def _charge_covered(candidate: str, article: Article) -> bool:
+    """True when the why already states every charge phrase the source uses."""
+    source = _source_text(article)
+    text = candidate or ""
+    if re.search(r"non-?cash", source, re.I) and not re.search(r"non-?cash", text, re.I):
+        return False
+    if re.search(r"accounting charges", source, re.I) and not re.search(r"accounting charges", text, re.I):
+        return False
+    return True
 
 
 def _usable_why(why: str, body: str, article: Article) -> str:
@@ -306,18 +375,25 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     if order:
         return order
     candidate = (why or "").strip()
-    if _DANGLING_END.search(candidate):
+    if _DANGLING_END.search(candidate) or _garbled_why(candidate):
         candidate = ""
     if is_criteria_echo(candidate) or is_filler_why(candidate) or _SHORTFALL_WHY.search(candidate):
         candidate = "" if _SHORTFALL_WHY.search(candidate) else _concrete_remainder(candidate)
     echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
     generic = re.search(r"changes what the lab can spend", candidate or "", re.I)
     charge = _loss_charge_why(article)
-    # The generic spend line is not an implication. A why that infers from
-    # figures already in the source, such as a jump from $518 billion to $750 billion, stays.
-    if charge and (not candidate or generic or echoed) and not re.search(
-        r"non-?cash|accounting charges", candidate or "", re.I
-    ):
+    # A why that already states the charge point, including an implication built
+    # from figures in the source, stays. One that omits the point does not.
+    if charge:
+        if (
+            _charge_covered(candidate, article)
+            and candidate
+            and not echoed
+            and not generic
+            and not _restates(candidate, body)
+            and not _DANGLING_END.search(candidate)
+        ):
+            return candidate
         return charge
     if generic:
         candidate = ""
@@ -338,16 +414,18 @@ def _loss_charge_why(article: Article) -> str:
     source = _source_text(article)
     if not re.search(r"\banthropic\b", source, re.I) or not re.search(r"\bloss\b", source, re.I):
         return ""
-    if re.search(r"non-?cash", source, re.I):
+    has_noncash = re.search(r"non-?cash", source, re.I) is not None
+    has_accounting = re.search(r"accounting charges", source, re.I) is not None
+    if has_noncash and has_accounting:
+        kind = "non-cash accounting charges"
+    elif has_noncash:
         kind = "non-cash charges"
-    elif re.search(r"accounting charges", source, re.I):
+    elif has_accounting:
         kind = "accounting charges"
     else:
         return ""
     says_most = re.search(r"\b(most|mostly)\b", source, re.I)
-    if says_most and kind == "non-cash charges":
-        line = "Most of Anthropic's reported loss is non-cash charges."
-    elif says_most:
+    if says_most:
         line = f"Most of Anthropic's reported loss is {kind}."
     else:
         figure = re.search(
@@ -596,27 +674,79 @@ def keep_prior_loss_context(body: str, article: Article) -> str:
     return " ".join((lead + needed + rest)[:3])
 
 
+def _prefix_minimax_says(sentence: str) -> str:
+    stripped = (sentence or "").rstrip(".")
+    if stripped and stripped[0].isupper():
+        stripped = stripped[0].lower() + stripped[1:]
+    return f"MiniMax says {stripped}."
+
+
+def _minimax_claim(sentence: str) -> bool:
+    if re.search(r"\b3\s?x\b", sentence or "", re.I) or re.search(r"70\s?%", sentence or ""):
+        return True
+    return bool(_token_prices(sentence or ""))
+
+
+def _fit_sentences(text: str, prefer, limit: int = 3) -> str:
+    """Keep the lead and the sentences that hold a required figure."""
+    sentences = split_sentences(text)
+    if len(sentences) <= limit:
+        return " ".join(sentences)
+    required = []
+    for index, sentence in enumerate(sentences):
+        if index == 0 or prefer(sentence):
+            required.append(index)
+    chosen = required[:limit]
+    for index in range(len(sentences)):
+        if len(chosen) >= limit:
+            break
+        if index not in chosen:
+            chosen.append(index)
+    return " ".join(sentences[index] for index in sorted(set(chosen))[:limit])
+
+
 def keep_minimax_says(body: str, article: Article) -> str:
-    """Keep the company's own attribution on a 3x or 70% claim."""
+    """Keep MiniMax's attribution, and put a source price back into the body."""
     source = _source_text(article)
-    if not re.search(r"\bMiniMax says\b", source, re.I):
-        return body
-    if not re.search(r"\b3\s?x\b", source, re.I) or not re.search(r"70\s?%", source):
+    if not re.search(r"\bminimax\b", f"{article.title or ''} {source}", re.I):
         return body
     text = body or ""
-    if not re.search(r"\b3\s?x\b", text, re.I) and not re.search(r"70\s?%", text):
-        return text
-    out = []
-    for sentence in split_sentences(text):
-        has_claim = re.search(r"\b3\s?x\b", sentence, re.I) or re.search(r"70\s?%", sentence)
-        if has_claim and not re.search(r"\bMiniMax says\b", sentence, re.I):
-            stripped = sentence.rstrip(".")
-            if stripped and stripped[0].isupper():
-                stripped = stripped[0].lower() + stripped[1:]
-            out.append(f"MiniMax says {stripped}.")
-        else:
+    says = re.search(r"\bMiniMax says\b", source, re.I) is not None
+    if says:
+        out = []
+        for sentence in split_sentences(text):
+            if _minimax_claim(sentence) and not re.search(r"\bMiniMax says\b", sentence, re.I):
+                prefixed = _prefix_minimax_says(sentence)
+                if line_is_grounded(prefixed, source, analysis=True):
+                    out.append(prefixed)
+                    continue
             out.append(sentence)
-    return " ".join(out)
+        text = " ".join(out)
+    if _token_prices(source):
+        have = {price for price in _token_prices(source) if any(
+            abs(price - seen) < 1e-9 for seen in _token_prices(text)
+        )}
+        if len(have) < len(set(_token_prices(source))):
+            for sentence in split_sentences(source):
+                if not _token_prices(sentence):
+                    continue
+                cleaned = clean_line(sentence, limit=420)
+                if not cleaned or not line_is_grounded(cleaned, source, analysis=False):
+                    continue
+                if says and not re.search(r"\bMiniMax says\b", cleaned, re.I):
+                    prefixed = _prefix_minimax_says(cleaned)
+                    cleaned = prefixed if line_is_grounded(prefixed, source, analysis=True) else cleaned
+                text = f"{text} {cleaned}".strip()
+                break
+    if says and not re.search(r"\bMiniMax says\b", text, re.I):
+        for sentence in split_sentences(source):
+            if not re.search(r"\bMiniMax says\b", sentence, re.I):
+                continue
+            cleaned = clean_line(sentence, limit=420)
+            if cleaned and line_is_grounded(cleaned, source, analysis=False):
+                text = f"{text} {cleaned}".strip()
+                break
+    return _fit_sentences(text, lambda sentence: _minimax_claim(sentence) or "MiniMax says" in sentence)
 
 
 def fix_price_units(text: str, source: str) -> str:
@@ -639,6 +769,187 @@ def fix_price_units(text: str, source: str) -> str:
     ):
         updated = re.sub(r"\bfrontier-lab model\b", "model", updated, flags=re.I)
     return re.sub(r"\s{2,}", " ", updated).strip()
+
+
+_FIGURE_RE = re.compile(
+    r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:billion|million|trillion|bln|bn))?|"
+    r"\d+(?:\.\d+)?\s?%|"
+    r"\d+(?:\.\d+)?\s?x\b|"
+    r"(?<![A-Za-z\d.])(?!(?:19|20)\d{2}\b)\d[\d,]*(?:\.\d+)*\b",
+    re.I,
+)
+
+
+def _figure_supported(figure: str, text: str) -> bool:
+    """True when this headline figure appears in the text."""
+    raw = (figure or "").strip()
+    if not raw or not text:
+        return False
+    percent = re.match(r"(\d+(?:\.\d+)?)\s?%$", raw)
+    if percent:
+        num = percent.group(1)
+        return re.search(
+            rf"(?<![\d.]){re.escape(num)}\s?%|(?<![\d.]){re.escape(num)}\s+percent\b",
+            text,
+            re.I,
+        ) is not None
+    times = re.match(r"(\d+(?:\.\d+)?)\s?x$", raw, re.I)
+    if times:
+        num = times.group(1)
+        return re.search(rf"(?<![\d.]){re.escape(num)}\s?x\b", text, re.I) is not None
+    money = re.match(
+        r"\$\s?(\d[\d,]*(?:\.\d+)?)(?:\s?(billion|million|trillion|bln|bn))?$",
+        raw,
+        re.I,
+    )
+    if money:
+        num = money.group(1).replace(",", "")
+        unit = (money.group(2) or "").lower()
+        if unit in ("bln", "bn"):
+            unit = "billion"
+        if not number_in_source(num, text):
+            return False
+        if not unit:
+            return True
+        hay = text.replace(",", "")
+        return re.search(
+            rf"(?<![\d.]){re.escape(num)}(?!\d)(?!\.\d).{{0,16}}\b{unit}\b",
+            hay,
+            re.I,
+        ) is not None
+    num = raw.replace(",", "")
+    if re.fullmatch(r"(?:19|20)\d{2}", num):
+        return True
+    return number_in_source(num, text)
+
+
+def _tidy_headline(text: str) -> str:
+    cleaned = re.sub(r"\s{2,}", " ", text or "").strip()
+    cleaned = re.sub(r"\s+([.,;:])", r"\1", cleaned)
+    cleaned = re.sub(
+        r"\b(by|of|at|about|around|nearly|over|under|to|than)\s*\.",
+        ".",
+        cleaned,
+        flags=re.I,
+    )
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;")
+    cleaned = re.sub(r"\.{2,}", ".", cleaned)
+    if cleaned and cleaned[-1] not in ".!?":
+        cleaned += "."
+    return cleaned
+
+
+def _sentence_with_figure(source: str, figure: str) -> str:
+    for sentence in split_sentences(source):
+        if not _figure_supported(figure, sentence):
+            continue
+        cleaned = clean_line(sentence, limit=420)
+        if cleaned and line_is_grounded(cleaned, source, analysis=False):
+            return cleaned
+    return ""
+
+
+def align_headline_numbers(headline: str, body: str, article: Article) -> tuple:
+    """A headline number has to be in the source, and then in the body."""
+    source = _source_text(article)
+    text = headline or ""
+    unsupported = [
+        match for match in _FIGURE_RE.finditer(text)
+        if not _figure_supported(match.group(0), source)
+    ]
+    for match in reversed(unsupported):
+        text = text[: match.start()] + text[match.end() :]
+    text = _tidy_headline(text)
+    kept = []
+    updated = body or ""
+    dropped = []
+    for sentence in split_sentences(updated):
+        figures = [match.group(0) for match in _FIGURE_RE.finditer(sentence)]
+        if any(not _figure_supported(figure, source) for figure in figures):
+            continue
+        dropped.append(sentence)
+    updated = " ".join(dropped)
+    for match in _FIGURE_RE.finditer(text):
+        figure = match.group(0)
+        if not _figure_supported(figure, source):
+            continue
+        kept.append(figure)
+        if _figure_supported(figure, updated):
+            continue
+        sentence = _sentence_with_figure(source, figure)
+        if sentence:
+            updated = f"{updated} {sentence}".strip()
+    updated = _fit_sentences(updated, lambda sentence: any(
+        _figure_supported(figure, sentence) for figure in kept
+    ))
+    return text, updated
+
+
+def _minimax_why(article: Article) -> str:
+    """A full sentence. The garbled 'since the scores...' fragment is not one."""
+    source = _source_text(article)
+    if not re.search(r"\bminimax\b", source, re.I):
+        return ""
+    prices = [price for price in _token_prices(source) if price > 0]
+    under = bool(prices) and all(price < 1 for price in prices)
+    scored = re.search(r"\b(benchmark|score|evaluat)", source, re.I) is not None
+    if scored and under:
+        line = (
+            "MiniMax's benchmark scores are company-reported, "
+            "and the token price is under a dollar per million tokens."
+        )
+    elif scored:
+        line = "MiniMax's benchmark scores are company-reported."
+    elif under:
+        line = "MiniMax's token price is under a dollar per million tokens."
+    else:
+        return ""
+    if not line_is_grounded(line, source, analysis=True):
+        return ""
+    return line
+
+
+def _named_fallback_why(article: Article) -> str:
+    title = article.title or ""
+    source = _source_text(article)
+    if re.search(r"\bminimax\b", title, re.I):
+        return _minimax_why(article)
+    if re.search(r"\bguardian\b", f"{title} {source}", re.I):
+        line = "Guardian Agents change which agents a company has to watch."
+        if line_is_grounded(line, source, analysis=True):
+            return line
+    return ""
+
+
+def _finalize_why(why: str, body: str, article: Article, siblings=None) -> str:
+    """Keep a why only when it belongs to this story. Otherwise rebuild or drop it."""
+    candidate = "" if _garbled_why(why) else (why or "")
+    candidate = _usable_why(candidate, body, article)
+    if candidate and why_matches_story(candidate, article, siblings):
+        return candidate
+    rebuilt = _usable_why("", body, article)
+    if rebuilt and why_matches_story(rebuilt, article, siblings):
+        return rebuilt
+    named = _named_fallback_why(article)
+    if named and why_matches_story(named, article, siblings):
+        return named
+    return ""
+
+
+def _finish_item(headline: str, body: str, why: str, article: Article, siblings=None) -> tuple:
+    """Quote, price, number, and why checks for one story."""
+    source = _source_text(article)
+    body = fix_quote_attribution(fix_price_units(body, source), source)
+    why = fix_quote_attribution(fix_price_units(why, source), source)
+    body = keep_prior_loss_context(body, article)
+    headline, body = align_headline_numbers(headline, body, article)
+    body = keep_minimax_says(body, article)
+    body = _drop_repeated_why(body, why)
+    why = _finalize_why(why, body, article, siblings)
+    if headline_is_raw(why, article.title):
+        why = _finalize_why("", body, article, siblings)
+    body = _drop_repeated_why(body, why)
+    return headline, body, why
 
 
 _MONEY_AMOUNT = re.compile(
@@ -901,16 +1212,26 @@ def _call_together(prompt: str, api_key: str, model: str) -> str:
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.2,
+            "temperature": 0,
+            # Together documents seed as an integer for reproducible sampling.
+            "seed": _TOGETHER_SEED,
             "response_format": {"type": "json_object"},
             # Thinking stays on. Low effort is the short trace this write-up needs.
             "reasoning_effort": "low",
         }
         response = send(payload)
         # A non-GLM override may reject the effort dial. Drop only that field.
-        if response.status_code == 400 and "reasoning" in (response.text or "").lower():
-            payload.pop("reasoning_effort", None)
-            response = send(payload)
+        if response.status_code == 400:
+            error = (response.text or "").lower()
+            dropped = False
+            if "reasoning" in error and "reasoning_effort" in payload:
+                payload.pop("reasoning_effort", None)
+                dropped = True
+            if "seed" in error and "seed" in payload:
+                payload.pop("seed", None)
+                dropped = True
+            if dropped:
+                response = send(payload)
         if response.status_code in (401, 403):
             raise AuthError(response.text[:300])
         if response.status_code == 400 and "model" in response.text.lower():
@@ -1125,6 +1446,21 @@ _LEDE_THEME = {
 }
 
 
+def lede_follows_rank(lede: str, rows: list) -> bool:
+    """Named stories appear in the lede in the same order as the ranked rows."""
+    text = (lede or "").lower()
+    positions = []
+    for row in rows[:3]:
+        lead = story_lead(row[0])
+        if not lead:
+            continue
+        found = re.search(rf"\b{lead}\b", text)
+        if not found:
+            continue
+        positions.append(found.start())
+    return positions == sorted(positions)
+
+
 def lede_names_stories(lede: str, rows: list) -> bool:
     """True when the lede names at least two of the top stories."""
     text = lede or ""
@@ -1188,10 +1524,10 @@ A hard number stays only when it appears in that item's text. Prefer the lab's o
 For each chosen item:
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what), written for this item's index only. Name this item's company or product. Do not describe a different item. Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
+lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, in the same order as the items, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 380 characters.
 Return JSON only.
@@ -1506,8 +1842,10 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         )
         if len(split_sentences(body)) < 2:
             continue
-        why_line = _usable_why(why, body, article)
-        if not why_line or is_criteria_echo(why_line):
+        headline, body, why_line = _finish_item(headline, body, why, article, articles)
+        if len(split_sentences(body)) < 2:
+            continue
+        if not why_line or is_criteria_echo(why_line) or is_filler_why(why_line):
             continue
         if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
             continue
@@ -1613,18 +1951,11 @@ def _compose_group(
         ))
         body = _DETAILS_LEAK.split(body)[0].strip()
         why = _DETAILS_LEAK.split(why)[0].strip()
-        source = _source_text(article)
-        body = fix_quote_attribution(fix_price_units(body, source), source)
-        body = keep_prior_loss_context(keep_minimax_says(body, article), article)
-        why = fix_quote_attribution(fix_price_units(why, source), source)
-        body = _drop_repeated_why(body, why)
         if _CHROME.search(body) or _CHROME.search(headline):
             print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
             continue
-        # A category slogan is not a why-line, including the extractive template.
-        why = _usable_why(why, body, article)
-        if headline_is_raw(why, article.title):
-            why = _usable_why("", body, article)
+        # A why is kept only when it names this story, not a sibling's.
+        headline, body, why = _finish_item(headline, body, why, article, articles)
         if not why or is_criteria_echo(why) or is_filler_why(why) or headline_is_raw(why, article.title):
             print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
             continue
@@ -1643,7 +1974,11 @@ def _compose_group(
     if _DANGLING_END.search(lede or ""):
         lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
+    if (
+        not line_is_grounded(check or lede, combined, analysis=True)
+        or not lede_names_stories(lede, pairs)
+        or not lede_follows_rank(lede, pairs)
+    ):
         lede = fit_lede(story_lede(pairs), since, until)
     return lede, pairs
 
