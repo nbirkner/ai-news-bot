@@ -246,6 +246,50 @@ def test_cli_writes_out_and_never_sends(tmp_path, monkeypatch):
     assert not (tmp_path / "2026-10-19.blocked.txt").exists()
 
 
+def test_generate_issue_publishes_nothing_when_ranking_times_out(monkeypatch):
+    import requests
+
+    def boom(*args, **kwargs):
+        raise requests.Timeout("read timeout=120")
+
+    monkeypatch.setattr("src.summarize._call_together", boom)
+    issue, failures, _discovered = generate_issue(
+        {"max_items": 7, "together_model": "zai-org/GLM-5.3", "sources": [{}, {}, {}], "read_full_text": False},
+        since=SINCE,
+        until=NOW,
+        api_key="sk-test",
+        fetcher=lambda config, since, now: FetchReport(articles=[_article()], failures=[], successes=3),
+        reader=lambda *args, **kwargs: None,
+    )
+    assert issue.items == []
+    assert any("Not publishing" in reason for reason in failures)
+    assert all("Skip Navigation" not in reason for reason in failures)
+    assert all("71.5%" not in reason for reason in failures)
+
+
+def test_a_ranking_failure_writes_a_quiet_note_and_exits(tmp_path, monkeypatch):
+    issue = _issue()
+    issue.items = []
+
+    class Discovered:
+        exa_search_calls = 0
+        exa_content_pages = 0
+
+    def fake_generate(config, **kwargs):
+        return issue, ["Ranking failed (read timeout=120). Not publishing."], Discovered()
+
+    monkeypatch.setattr("main_newsletter.generate_issue", fake_generate)
+    monkeypatch.setenv("TOGETHER_API_KEY", "sk-personal-test")
+    monkeypatch.setenv("OUT_DIR", str(tmp_path))
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--dry-run", "--window-end", "2026-10-19"])
+    assert code == 2
+    note = (tmp_path / "2026-10-19.blocked.txt").read_text()
+    assert "Not publishing" in note
+    assert not (tmp_path / "2026-10-19.mdx").exists()
+    assert not (tmp_path / "2026-10-19.html").exists()
+
+
 def test_cli_refuses_send_flag(monkeypatch):
     from main_newsletter import main
     monkeypatch.setattr(

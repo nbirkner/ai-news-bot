@@ -13,6 +13,7 @@ from src.dedupe import (
     round_already_announced,
     same_underlying_event,
 )
+from src.guardrails import is_homepage_url
 from src.rank import is_low_trust
 from src.exa_search import ExaBudget, resolve_cap, search_queries
 from src.fetch import fetch_all
@@ -93,6 +94,9 @@ def prepare_candidates(
     for article in combined:
         if canonical_url(article.url) in seen:
             continue
+        if is_homepage_url(article.url):
+            print(f"Skip, homepage url: {article.title}", file=sys.stderr)
+            continue
         if event_already_happened(article, since) or round_already_announced(article, prior, since):
             print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
             continue
@@ -121,6 +125,9 @@ def prepare_candidates(
         for article in result.shortlist:
             if event_already_happened(article, since):
                 print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
+                continue
+            if is_homepage_url(article.url):
+                print(f"Skip, homepage url: {article.title}", file=sys.stderr)
                 continue
             kept.append(article)
         result.shortlist = kept

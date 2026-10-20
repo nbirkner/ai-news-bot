@@ -42,6 +42,31 @@ _PRIVATE_WORDS = re.compile(
 )
 
 
+def is_homepage_url(url: str) -> bool:
+    """A site root or a quote page is not an article.
+
+    MarketScreener story URLs contain ``/news/``. A ticker such as
+    ``/quote/stock/...`` is the homepage for that symbol.
+    """
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    if path in {"", "/"}:
+        return True
+    lowered = path.lower()
+    if "marketscreener.com" in host and "/news" not in lowered:
+        return True
+    if "/quote/" in lowered or lowered.startswith("/quote"):
+        return True
+    return False
+
+
 def is_public_http_url(url: str) -> bool:
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in {"http", "https"}:
@@ -100,6 +125,8 @@ def item_drop_reasons(item) -> list:
     reasons = []
     if not is_public_http_url(item.url):
         reasons.append("missing public source url")
+    elif is_homepage_url(item.url):
+        reasons.append("homepage url")
     if is_generic_oneliner(item.what_happened, item.body):
         reasons.append("generic one-liner")
     return reasons

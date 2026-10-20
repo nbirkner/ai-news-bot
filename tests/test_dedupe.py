@@ -209,6 +209,62 @@ def test_the_federal_register_beats_a_wire_recap_of_the_same_order():
     assert kept[0].source_domain == "federalregister.gov"
 
 
+def test_nscale_on_cnbc_and_reuters_is_one_deal():
+    from src.dedupe import jaccard
+    cnbc = article(
+        "https://www.cnbc.com/2026/10/20/anthropic-nscale-deal.html",
+        "Anthropic in talks with neocloud Nscale over second multibillion-dollar deal, source tells CNBC",
+        priority=2,
+    )
+    cnbc.source_name = "CNBC"
+    cnbc.source_domain = "cnbc.com"
+    cnbc.full_text = "Anthropic and Nscale are in talks over a second cloud deal. " * 12
+    reuters = article(
+        "https://uk.marketscreener.com/news/nscale-anthropic-45-billion-123/",
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+        priority=2,
+    )
+    reuters.source_name = "Reuters"
+    reuters.source_domain = "uk.marketscreener.com"
+    reuters.full_text = "Nscale and Anthropic are in talks for a deal of about $45 billion. " * 12
+    assert jaccard(cnbc.title, reuters.title) < 0.55
+    assert same_story(cnbc, reuters)
+    other = article(
+        "https://www.cnbc.com/2026/10/20/anthropic-amazon.html",
+        "Anthropic in talks with Amazon over a new cloud deal",
+        priority=2,
+    )
+    assert not same_story(cnbc, other)
+    kept = dedupe_articles([cnbc, reuters])
+    assert len(kept) == 1
+    assert kept[0].source_name == "Reuters"
+
+
+def test_an_investing_stub_loses_to_the_reuters_copy():
+    stub = article(
+        "https://www.investing.com/news/nscale-anthropic",
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+        priority=2,
+        preview="Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+    )
+    stub.source_name = "Investing.com"
+    stub.source_domain = "investing.com"
+    readable = article(
+        "https://www.marketscreener.com/news/nscale-anthropic-45-billion/",
+        "Nscale, Anthropic in talks for a new $45 billion AI cloud deal, source says",
+        priority=2,
+        preview="Nscale and Anthropic are in talks for a cloud deal of about $45 billion. " * 4,
+    )
+    readable.source_name = "Reuters"
+    readable.source_domain = "marketscreener.com"
+    readable.full_text = readable.content_preview * 3
+    assert same_story(stub, readable)
+    kept = dedupe_articles([stub, readable])
+    assert len(kept) == 1
+    assert kept[0].source_name == "Reuters"
+    assert "marketscreener.com" in kept[0].url
+
+
 def test_dedupe_keeps_the_lab_over_the_recap():
     lab = article(
         "https://openai.com/news/model",

@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from src.clean import collapse_ws
+from src.clean import collapse_ws, scrub_copy
+from src.clean import _CHROME_PHRASE as _CHROME
 from src.exa_search import fetch_contents
 from src.fetch import DATE_RE, http_get
 
@@ -73,13 +74,6 @@ _SYNDICATION_HOSTS = (
 )
 
 
-_CHROME = re.compile(
-    r"\b(skip navigation|skip to (?:main )?content|watch now|livestream menu|"
-    r"investing club|all rights reserved|sign up for our)\b",
-    re.I,
-)
-
-
 def _without_chrome(text: str) -> str:
     kept = []
     for sentence in re.split(r"(?<=[.!?])\s+", collapse_ws(text or "")):
@@ -94,7 +88,14 @@ def extract_html_text(raw: str) -> str:
     for tag in soup(["script", "style", "nav", "footer", "noscript", "svg", "header", "form", "aside"]):
         tag.decompose()
     preferred = None
-    for class_name in ("markdown-body", "article-body", "post-content", "entry-content", "article__content"):
+    for class_name in (
+        "markdown-body",
+        "article-body",
+        "ArticleBody",
+        "post-content",
+        "entry-content",
+        "article__content",
+    ):
         preferred = soup.find(class_=re.compile(class_name))
         if preferred is not None:
             break
@@ -107,8 +108,8 @@ def extract_html_text(raw: str) -> str:
         if len(text) >= 40 and not _CHROME.search(text):
             paragraphs.append(text)
     if paragraphs and sum(len(part) for part in paragraphs) >= 80:
-        return "\n".join(paragraphs)
-    return _without_chrome(node.get_text(" ", strip=True))
+        return scrub_copy("\n".join(paragraphs))
+    return scrub_copy(_without_chrome(node.get_text(" ", strip=True)))
 
 
 def extract_details(text: str) -> dict:
@@ -229,14 +230,44 @@ def syndication_queries(title: str) -> list:
     return [f"\"{item}\" {sites}" for item in titles]
 
 
+def syndication_preference(url: str) -> int:
+    """Lower wins. MarketScreener, then Yahoo, then PYMNTS."""
+    host = _host(url)
+    if "marketscreener" in host:
+        return 0
+    if "yahoo" in host:
+        return 1
+    if "pymnts" in host:
+        return 2
+    return 9
+
+
+def choose_syndication(copies: list) -> tuple:
+    """Pick a readable syndication copy. Skip a homepage or ticker URL."""
+    from src.guardrails import is_homepage_url
+    viable = []
+    for text, url in copies:
+        if len(text or "") < 400 or not url or is_homepage_url(url):
+            continue
+        viable.append((text, url))
+    if not viable:
+        return "", ""
+    viable.sort(key=lambda row: (syndication_preference(row[1]), -len(row[0])))
+    text, url = viable[0]
+    return text[:12000], url
+
+
 def syndication_text(title: str, original_url: str = "") -> tuple:
     """Readable wire copy when the primary page returns 401 or 403. (text, url)."""
     from src.fetch import decode_google_news_url
+    from src.guardrails import is_homepage_url
     queries = syndication_queries(title)
     if not queries:
         return "", ""
     import feedparser
     origin = _host(original_url)
+    copies = []
+    fetches = 0
     for query in queries:
         try:
             raw = http_get(
@@ -247,7 +278,7 @@ def syndication_text(title: str, original_url: str = "") -> tuple:
             print(f"Warning: syndication search failed: {exc}", file=sys.stderr)
             continue
         feed = feedparser.parse(raw)
-        for entry in feed.entries[:4]:
+        for entry in feed.entries[:8]:
             link = entry.get("link") or ""
             if "news.google.com" not in link:
                 continue
@@ -258,6 +289,11 @@ def syndication_text(title: str, original_url: str = "") -> tuple:
                 continue
             if not url or not _syndication_host(url) or _host(url) == origin:
                 continue
+            if is_homepage_url(url):
+                continue
+            if fetches >= 6:
+                break
+            fetches += 1
             try:
                 page = http_get(url).text
             except Exception as exc:
@@ -265,8 +301,12 @@ def syndication_text(title: str, original_url: str = "") -> tuple:
                 continue
             text = extract_html_text(page)
             if len(text) >= 400:
-                return text[:12000], url
-    return "", ""
+                copies.append((text, url))
+                if syndication_preference(url) == 0:
+                    return choose_syndication(copies)
+        if fetches >= 6:
+            break
+    return choose_syndication(copies)
 
 
 def _cache_text(url: str) -> str:
@@ -338,6 +378,14 @@ def fill_denied_stubs(articles) -> None:
         _apply_fallback(article)
 
 
+def _syndication_first(url: str) -> bool:
+    """Reuters and Investing.com refuse a bot. Read a syndication copy instead."""
+    host = _host(url)
+    if "investing.com" in host:
+        return True
+    return _blocked_host(url) and _paywalled(url)
+
+
 def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None, getter=None, contents=None) -> None:
     """Fill full_text and details in place. Failures stay on the preview."""
     live_fetch = getter is None
@@ -346,8 +394,8 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
     for article in articles:
         if len(article.full_text or "") >= 400:
             continue
-        # Reuters 401s a direct GET. Syndication is the read, same as a 403.
-        if live_fetch and _blocked_host(article.url) and _paywalled(article.url):
+        # Reuters and Investing.com 401 or 403 a direct GET. Do not request them.
+        if live_fetch and _syndication_first(article.url):
             _apply_fallback(article)
             continue
         if _paywalled(article.url):
@@ -365,7 +413,7 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
             continue
         if not raw:
             continue
-        text = extract_html_text(raw) if "<" in raw[:500].lower() else collapse_ws(raw)
+        text = extract_html_text(raw) if "<" in raw[:500].lower() else scrub_copy(raw)
         if len(text) > len(article.full_text or ""):
             article.full_text = text[:12000]
     for article in articles:

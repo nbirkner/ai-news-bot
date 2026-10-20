@@ -9,7 +9,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from src.clean import collapse_ws, is_thin_preview, shares_distinctive_word
+from src.clean import collapse_ws, is_thin_preview, scrub_copy, shares_distinctive_word
 from src.models import Article, FetchReport
 
 HEADERS = {
@@ -696,9 +696,11 @@ def _readable_excerpt(url: str, title: str = "") -> tuple:
     host = _host(url)
     blocked = any(host == bit or host.endswith("." + bit) for bit in (
         "reuters.com", "politico.com", "wsj.com", "ft.com", "bloomberg.com", "nytimes.com",
+        "investing.com",
     ))
     if blocked:
-        if "reuters.com" in host and title:
+        # Investing.com 403s the same way Reuters does. Use the MarketScreener copy.
+        if title and ("reuters.com" in host or "investing.com" in host):
             return _syndication_excerpt(title, url)
         return "", url, "", ""
     try:
@@ -712,7 +714,7 @@ def _readable_excerpt(url: str, title: str = "") -> tuple:
     soup = BeautifulSoup(raw, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "noscript"]):
         tag.decompose()
-    return collapse_ws(soup.get_text(" ", strip=True))[:4000], url, "", ""
+    return scrub_copy(collapse_ws(soup.get_text(" ", strip=True)))[:4000], url, "", ""
 
 
 def rank_wire_headlines(articles: list, cap: int) -> list:

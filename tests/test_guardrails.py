@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from src.guardrails import (
     is_generic_oneliner,
+    is_homepage_url,
     is_public_http_url,
     item_drop_reasons,
     publishing_blocks,
@@ -55,6 +56,17 @@ def test_generic_oneliner_rejects_the_release_note():
 def test_three_concrete_sentences_are_not_generic():
     assert not is_generic_oneliner(_item().what_happened, _item().body)
     assert item_drop_reasons(_item()) == []
+
+
+def test_a_homepage_or_ticker_url_is_dropped():
+    home = "https://www.marketscreener.com/"
+    ticker = "https://www.marketscreener.com/quote/stock/ORCHESTRA-BIOMED-INC-123/"
+    story = "https://www.marketscreener.com/news/openai-acquires-orchestra-bio-123/"
+    assert is_homepage_url(home)
+    assert is_homepage_url(ticker)
+    assert not is_homepage_url(story)
+    assert "homepage url" in item_drop_reasons(_item(url=ticker))
+    assert item_drop_reasons(_item(url=story)) == []
 
 
 def test_missing_or_private_url_is_dropped():

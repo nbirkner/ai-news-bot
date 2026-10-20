@@ -213,6 +213,36 @@ def _same_company_round(left, right) -> bool:
     return bool(shared)
 
 
+_DEAL_EVENT = re.compile(r"\b(deal|talks|agreement|partnership)\b", re.I)
+_DEAL_SKIP = {
+    "talks", "deal", "deals", "source", "says", "tells", "billion", "million",
+    "dollar", "dollars", "second", "worth", "cloud", "computing", "reports",
+    "report", "exclusive", "backed", "agreement", "partnership", "multibillion",
+    "neocloud",
+}
+
+
+def _deal_token(word: str) -> bool:
+    if len(word) < 5 or word in _DEAL_SKIP:
+        return False
+    parts = [part for part in word.split("-") if part]
+    if any(part in _DEAL_SKIP or "billion" in part or part in {"dollar", "dollars"} for part in parts):
+        return False
+    return True
+
+
+def _same_named_deal(left, right) -> bool:
+    """One cloud deal reported by two wires, even when the headline is rewritten."""
+    if not _DEAL_EVENT.search(left.title or "") or not _DEAL_EVENT.search(right.title or ""):
+        return False
+    shared = {
+        word
+        for word in set(tokens(left.title)) & set(tokens(right.title))
+        if _deal_token(word)
+    }
+    return len(shared) >= 2
+
+
 def same_story(left, right) -> bool:
     if canonical_url(left.url) == canonical_url(right.url):
         return True
@@ -223,6 +253,7 @@ def same_story(left, right) -> bool:
         or _same_named_event(left, right, _POLICY_EVENT)
         or _same_acquisition(left, right)
         or _same_company_round(left, right)
+        or _same_named_deal(left, right)
     )
 
 
@@ -278,7 +309,7 @@ def _wire_rank(article) -> int:
     blob = f"{article.source_domain or ''} {article.source_name or ''}".lower()
     if "reuters" in blob:
         return 0
-    if "yahoo" in blob:
+    if "yahoo" in blob or "marketscreener" in blob:
         return 1
     if "pymnts" in blob:
         return 4

@@ -268,6 +268,95 @@ def test_filler_why_names_the_story_instead_of_a_slogan():
     assert is_criteria_echo(echo)
 
 
+def test_a_legal_or_policy_template_is_not_a_why_line():
+    from src.summarize import _WHY, _usable_why, is_filler_why
+    article = _article(
+        "Nscale and Anthropic are in talks over a second cloud deal",
+        "Nscale and Anthropic are discussing a second cloud agreement.",
+    )
+    template = _WHY["policy"]
+    assert "legal or policy" in template
+    assert is_filler_why(template)
+    why = _usable_why(template, "Nscale and Anthropic are discussing a second cloud agreement.", article)
+    assert why != template
+    assert "legal or policy" not in (why or "").lower()
+
+
+def test_ranking_timeout_publishes_nothing(monkeypatch):
+    import requests
+    article = _article(
+        "Nscale and Anthropic are in talks over a second cloud deal",
+        "Skip Navigation Markets. Nscale and Anthropic are in talks over a cloud deal worth about $45 billion.",
+    )
+    article.full_text = article.content_preview
+
+    def boom(prompt, api_key, model):
+        raise requests.Timeout("read timeout=120")
+
+    monkeypatch.setattr("src.summarize._call_together", boom)
+    with pytest.raises(SchemaError) as exc:
+        compose_briefing(
+            [article],
+            "sk-test",
+            "zai-org/GLM-5.3",
+            strict_auth=True,
+            require_full_body=True,
+        )
+    message = str(exc.value)
+    assert "Not publishing" in message
+    assert "Skip Navigation" not in message
+    assert article.title not in message
+
+
+def test_read_timeout_retries_with_backoff(monkeypatch):
+    import requests
+    timeouts = []
+    sleeps = []
+
+    def post(url, headers=None, json=None, timeout=None):
+        timeouts.append(timeout)
+        raise requests.Timeout("read timeout=120")
+
+    monkeypatch.setattr("src.summarize.requests.post", post)
+    monkeypatch.setattr("src.summarize.time.sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(requests.Timeout):
+        _call_together("hello", "sk-test", "zai-org/GLM-5.3")
+    assert timeouts == [180, 240, 300]
+    assert sleeps == [8, 16]
+
+
+def test_a_long_shortlist_is_ranked_in_batches(monkeypatch):
+    prompts = []
+
+    def fake_call(prompt, api_key, model):
+        prompts.append(prompt)
+        return json.dumps({"lede": "", "items": []})
+
+    articles = []
+    for index in range(10):
+        articles.append(_article(
+            f"Lab {index} releases a model with a stated price",
+            f"Lab {index} released a model. The price is ${index} per million tokens.",
+        ))
+        articles[-1].url = f"https://example.com/lab-{index}"
+    monkeypatch.setattr("src.summarize._call_together", fake_call)
+    lede, pairs = compose_briefing(
+        articles,
+        "sk-test",
+        "zai-org/GLM-5.3",
+        strict_auth=True,
+        require_full_body=True,
+    )
+    assert lede == ""
+    assert pairs == []
+    assert len(prompts) == 2
+    for prompt in prompts:
+        start = prompt.find("Candidates:\n")
+        blob = prompt[start + len("Candidates:\n"):]
+        rows = json.loads(blob[: blob.find("\n\nReturn:")])
+        assert 1 <= len(rows) <= 8
+
+
 def test_a_prefixed_consequence_keeps_the_consequence():
     from src.summarize import _usable_why, is_criteria_echo
     article = _article(
@@ -362,6 +451,50 @@ def test_syndication_search_drops_the_exclusive_label():
     assert queries
     assert "EXCLUSIVE" not in queries[0]
     assert "OpenAI seeks to accelerate fundraising" in queries[0]
+
+
+def test_syndication_prefers_marketscreener_and_skips_the_homepage():
+    from src.read import choose_syndication, syndication_preference
+    home = "https://www.marketscreener.com/quote/stock/ORCHESTRA-BIOMED-INC-1/"
+    yahoo = "https://finance.yahoo.com/news/nscale-anthropic-deal-1.html"
+    screen = "https://www.marketscreener.com/news/nscale-anthropic-deal-1/"
+    assert syndication_preference(screen) < syndication_preference(yahoo)
+    text, url = choose_syndication([
+        ("Y" * 500, yahoo),
+        ("H" * 500, home),
+        ("M" * 450, screen),
+    ])
+    assert url == screen
+    assert text.startswith("M")
+
+
+def test_investing_com_is_read_from_syndication(monkeypatch):
+    from src.fetch import _readable_excerpt
+    from src.read import _syndication_first
+
+    assert _syndication_first("https://www.investing.com/news/reuters-nscale")
+    assert _syndication_first("https://www.reuters.com/technology/nscale")
+    assert not _syndication_first("https://www.cnbc.com/2026/10/20/nscale.html")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("Investing.com was fetched directly")
+
+    monkeypatch.setattr("src.fetch.http_get", boom)
+    monkeypatch.setattr(
+        "src.read.syndication_text",
+        lambda title, original_url="": (
+            "Nscale and Anthropic are in talks. " * 30,
+            "https://uk.marketscreener.com/news/nscale-anthropic-45-billion/",
+        ),
+    )
+    text, url, name, domain = _readable_excerpt(
+        "https://www.investing.com/news/reuters-nscale",
+        "Nscale and Anthropic in talks for a cloud deal",
+    )
+    assert "marketscreener.com" in url
+    assert name == "MarketScreener"
+    assert "Nscale" in text
+    assert "investing.com" not in (domain or "")
 
 
 def test_a_401_uses_the_same_fallback_as_a_403():

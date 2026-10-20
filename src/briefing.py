@@ -21,7 +21,7 @@ from src.state import (
     save_last_run,
     save_seen,
 )
-from src.summarize import AuthError, compose_briefing, theme_lede, write_copies
+from src.summarize import AuthError, SchemaError, compose_briefing, theme_lede, write_copies
 
 
 def _story_fields(row):
@@ -168,6 +168,8 @@ def run_briefing(
             raise BriefingError(
                 "Together API rejected the key or model name. Not posting."
             ) from exc
+        except SchemaError as exc:
+            raise BriefingError(str(exc) or "Ranking failed. Not publishing.") from exc
         selected = [row[0] for row in pairs]
         items = []
         for row in pairs:
@@ -201,6 +203,8 @@ def run_briefing(
                 raise BriefingError(
                     "Together API rejected the key or model name. Not posting."
                 ) from exc
+            except SchemaError as exc:
+                raise BriefingError(str(exc) or "Writing failed. Not publishing.") from exc
             items = [
                 BriefingItem(
                     what_happened=what,

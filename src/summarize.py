@@ -11,6 +11,7 @@ from src.clean import (
     first_sentence,
     is_thin_preview,
     line_is_grounded,
+    scrub_copy,
     shares_distinctive_word,
     split_sentences,
 )
@@ -18,6 +19,11 @@ from src.usage import record_llm_call
 from src.models import Article
 
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
+
+# A shortlist of 20 full texts does not fit in one 120s read. Rank in batches,
+# and give each attempt a longer read timeout than the last.
+_RANK_BATCH = 8
+_READ_TIMEOUTS = (180, 240, 300)
 
 # GLM-5.3 always thinks, and the trace shares this budget with the answer.
 # Default effort is "max". `reasoning: {enabled: false}` is ignored (HTTP 200),
@@ -98,7 +104,8 @@ _FILLER_WHY = re.compile(
     r"changes how models connect to tools|"
     r"a research result worth|"
     r"matters only when it changes how models are deployed|"
-    r"if you ship or run models"
+    r"if you ship or run models|"
+    r"legal or policy"
     r")\b",
     re.I,
 )
@@ -522,13 +529,18 @@ def _call_together(prompt: str, api_key: str, model: str) -> str:
                         "Content-Type": "application/json",
                     },
                     json=payload,
-                    timeout=120,
+                    timeout=_READ_TIMEOUTS[attempt],
                 )
             except requests.Timeout:
                 if attempt == 2:
                     raise
-                print("Warning: Together timed out. Retrying.", file=sys.stderr)
-                time.sleep(5)
+                wait = 8 * (2 ** attempt)
+                print(
+                    f"Warning: Together timed out (read timeout={_READ_TIMEOUTS[attempt]}). "
+                    f"Retrying in {wait}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
                 continue
             if response.status_code == 429 and attempt < 2:
                 print("Warning: Together rate limited. Retrying.", file=sys.stderr)
@@ -636,25 +648,25 @@ def _accept(line: str, article: Article, *, analysis: bool, fallback: str, limit
 
 
 def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth: bool) -> list:
-    fallbacks = [extractive_lines(article) for article in articles]
-    if not articles or not api_key:
-        return fallbacks
+    if not articles:
+        return []
+    if not api_key:
+        return [extractive_lines(article) for article in articles]
     try:
         raw = _call_together(_prompt(articles), api_key, model)
     except AuthError:
         if strict_auth:
             raise
-        print("Warning: Together auth failed. Using source text.", file=sys.stderr)
-        return fallbacks
+        raise SchemaError("Writing failed. Not publishing.")
+    except SchemaError:
+        raise
     except Exception as exc:
-        print(f"Warning: Together request failed ({exc}). Using source text.", file=sys.stderr)
-        return fallbacks
+        raise SchemaError(f"Writing failed ({exc}). Not publishing.") from exc
 
     payload = _parse_json_object(raw)
     rows = payload.get("items") if payload else None
     if not isinstance(rows, list):
-        print("Warning: Together returned no items. Using source text.", file=sys.stderr)
-        return fallbacks
+        raise SchemaError("Writing failed. Not publishing.")
 
     by_index = {}
     for row in rows:
@@ -663,14 +675,21 @@ def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth
 
     copies = []
     for index, article in enumerate(articles):
-        fallback_what, fallback_why = fallbacks[index]
+        fallback_what, _fallback_why = extractive_lines(article)
         row = by_index.get(index)
         if not row:
-            copies.append((fallback_what, fallback_why))
+            copies.append(("", ""))
             continue
         what = _accept(str(row.get("what_happened") or ""), article, analysis=False, fallback=fallback_what)
-        why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=fallback_why)
-        copies.append((what, why))
+        why = scrub_copy(_accept(
+            str(row.get("why_it_matters") or ""),
+            article,
+            analysis=True,
+            fallback="",
+        ))
+        if is_filler_why(why) or is_criteria_echo(why):
+            why = ""
+        copies.append((scrub_copy(what), why))
     return copies
 
 
@@ -772,10 +791,10 @@ _THIN_RELEASE = re.compile(
 
 def factual_body(article: Article) -> str:
     """Up to five concrete sentences from the article, in source order."""
-    source = "\n".join([
+    source = scrub_copy("\n".join([
         getattr(article, "full_text", "") or "",
         article.content_preview or "",
-    ])
+    ]))
     title = (article.title or "").strip().lower().rstrip(".")
     kept = []
     seen = set()
@@ -1018,14 +1037,125 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
     return pairs
 
 
-def _fallback_pairs(articles: list, limit: int) -> tuple:
-    chosen = list(articles)[:limit]
+def _not_publishing(exc: BaseException | None = None) -> SchemaError:
+    if exc is None:
+        return SchemaError("Ranking failed. Not publishing.")
+    return SchemaError(f"Ranking failed ({exc}). Not publishing.")
+
+
+def _compose_group(
+    articles: list,
+    api_key: str,
+    model: str,
+    *,
+    recent,
+    limit: int,
+    require_full_body: bool,
+    since,
+    until,
+) -> tuple:
+    """One ranking call. Raises on failure. An empty list means nothing cleared the bar."""
+    prompt = _rank_prompt(articles, recent or [], limit, since=since, until=until)
+    raw = _call_together(prompt, api_key, model)
+    payload = _parse_json_object(raw)
+    if require_full_body:
+        payload = _schema_or_retry(payload, prompt, api_key, model)
+    rows = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise SchemaError("Ranking failed. Not publishing.")
+
     pairs = []
-    for article in chosen:
-        what, why = extractive_lines(article)
-        pairs.append((article, what, factual_body(article), why))
-    lede = theme_lede(chosen) if chosen else ""
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("index"), int):
+            continue
+        index = row["index"]
+        if index in seen or index < 0 or index >= len(articles):
+            continue
+        seen.add(index)
+        article = articles[index]
+        what_fb, _why_fb = extractive_lines(article)
+        headline_raw = scrub_copy(str(row.get("headline") or row.get("what_happened") or ""))
+        headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
+        # A Federal Register notice is rewritten even when the model copies the title.
+        if _government_notice(article) or _order_lead(article):
+            headline = _order_lead(article) or rewrite_headline(article.title)
+        elif (
+            headline_is_raw(headline, article.title)
+            or len(headline.split()) > 12
+            or _CHROME.search(headline)
+        ):
+            headline = rewrite_headline(article.title)
+        elif len(headline) > 110:
+            headline = _short_lead(headline, 110)
+        headline = scrub_copy(headline)
+        if _CHROME.search(headline):
+            headline = clean_line(_CHROME.sub("", headline))
+        body = scrub_copy(drop_unjoined_numbers(
+            strip_unverified_expectation(
+                label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
+                article,
+            ),
+            article,
+        ))
+        why = scrub_copy(_accept(
+            str(row.get("why_it_matters") or ""),
+            article,
+            analysis=True,
+            fallback="",
+            limit=380,
+        ))
+        body = _DETAILS_LEAK.split(body)[0].strip()
+        why = _DETAILS_LEAK.split(why)[0].strip()
+        body = _drop_repeated_why(body, why)
+        if _CHROME.search(body) or _CHROME.search(headline):
+            print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
+            continue
+        # A category slogan is not a why-line, including the extractive template.
+        why = _usable_why(why, body, article)
+        if headline_is_raw(why, article.title):
+            why = _usable_why("", body, article)
+        if not why or is_criteria_echo(why) or is_filler_why(why) or headline_is_raw(why, article.title):
+            print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
+            continue
+        pairs.append((article, headline, body, why))
+        if len(pairs) >= limit:
+            break
+
+    if not pairs:
+        # The model looked and found nothing worth posting.
+        return "", []
+
+    pairs = _backfill_clear_bar(articles, pairs, limit)
+
+    combined = "\n".join(_source_text(row[0]) for row in pairs)
+    lede = fit_lede(clean_line(str((payload or {}).get("lede") or ""), limit=420), since, until)
+    if _DANGLING_END.search(lede or ""):
+        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
+    check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
+    if not line_is_grounded(check or lede, combined, analysis=True):
+        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     return lede, pairs
+
+
+def _rank_finalists(articles: list, api_key: str, model: str, **kwargs) -> list:
+    """Rank the shortlist in batches so one call is not the full page text."""
+    if len(articles) <= _RANK_BATCH:
+        return articles
+    from src.dedupe import same_story
+    chosen = []
+    for start in range(0, len(articles), _RANK_BATCH):
+        _lede, pairs = _compose_group(articles[start:start + _RANK_BATCH], api_key, model, **kwargs)
+        for row in pairs:
+            article = row[0]
+            if any(same_story(article, previous) for previous in chosen):
+                continue
+            chosen.append(article)
+    if len(chosen) <= _RANK_BATCH:
+        return chosen
+    priority = [article for article in chosen if _CLEAR_BAR.search(article.title or "")]
+    rest = [article for article in chosen if article not in priority]
+    return (priority + rest)[:_RANK_BATCH]
 
 
 def compose_briefing(
@@ -1044,103 +1174,29 @@ def compose_briefing(
 
     pairs is a list of (article, headline, body, why_it_matters) in rank order.
     A 3-tuple from an older composer is still accepted by the briefing runner.
+    A ranking or writing failure publishes nothing.
     """
     if not articles:
         return "", []
     if not api_key:
-        return _fallback_pairs(articles, limit)
-    prompt = _rank_prompt(articles, recent or [], limit, since=since, until=until)
+        raise _not_publishing()
+    kwargs = dict(
+        recent=recent,
+        limit=limit,
+        require_full_body=require_full_body,
+        since=since,
+        until=until,
+    )
     try:
-        raw = _call_together(prompt, api_key, model)
+        finalists = _rank_finalists(articles, api_key, model, **kwargs)
+        if len(articles) > _RANK_BATCH and not finalists:
+            return "", []
+        return _compose_group(finalists, api_key, model, **kwargs)
     except AuthError:
         if strict_auth:
             raise
-        print("Warning: model auth failed. Using the shortlist order.", file=sys.stderr)
-        return _fallback_pairs(articles, limit)
+        raise _not_publishing()
     except SchemaError:
-        if require_full_body:
-            raise
-        print("Warning: model answer was cut off. Using the shortlist order.", file=sys.stderr)
-        return _fallback_pairs(articles, limit)
+        raise
     except Exception as exc:
-        print(f"Warning: model ranking failed ({exc}). Using the shortlist order.", file=sys.stderr)
-        return _fallback_pairs(articles, limit)
-
-    payload = _parse_json_object(raw)
-    if require_full_body:
-        payload = _schema_or_retry(payload, prompt, api_key, model)
-    rows = payload.get("items") if payload else None
-    if not isinstance(rows, list):
-        print("Warning: model returned no ranking. Using the shortlist order.", file=sys.stderr)
-        return _fallback_pairs(articles, limit)
-
-    pairs = []
-    seen = set()
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("index"), int):
-            continue
-        index = row["index"]
-        if index in seen or index < 0 or index >= len(articles):
-            continue
-        seen.add(index)
-        article = articles[index]
-        what_fb, why_fb = extractive_lines(article)
-        headline_raw = str(row.get("headline") or row.get("what_happened") or "")
-        headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
-        # A Federal Register notice is rewritten even when the model copies the title.
-        if _government_notice(article) or _order_lead(article):
-            headline = _order_lead(article) or rewrite_headline(article.title)
-        elif (
-            headline_is_raw(headline, article.title)
-            or len(headline.split()) > 12
-            or _CHROME.search(headline)
-        ):
-            headline = rewrite_headline(article.title)
-        elif len(headline) > 110:
-            headline = _short_lead(headline, 110)
-        if _CHROME.search(headline):
-            headline = clean_line(_CHROME.sub("", headline))
-        body = drop_unjoined_numbers(
-            strip_unverified_expectation(
-                label_benchmark(_publishable_body(str(row.get("body") or ""), article), article),
-                article,
-            ),
-            article,
-        )
-        why = _accept(
-            str(row.get("why_it_matters") or ""),
-            article,
-            analysis=True,
-            fallback="",
-            limit=380,
-        )
-        body = _DETAILS_LEAK.split(body)[0].strip()
-        why = _DETAILS_LEAK.split(why)[0].strip()
-        body = _drop_repeated_why(body, why)
-        if _CHROME.search(body) or _CHROME.search(headline):
-            print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
-            continue
-        why = _usable_why(why or why_fb, body, article)
-        if headline_is_raw(why, article.title):
-            why = _usable_why("", body, article)
-        if not why or is_criteria_echo(why) or headline_is_raw(why, article.title):
-            print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
-            continue
-        pairs.append((article, headline, body, why))
-        if len(pairs) >= limit:
-            break
-
-    if not pairs:
-        # The model looked and found nothing worth posting.
-        return "", []
-
-    pairs = _backfill_clear_bar(articles, pairs, limit)
-
-    combined = "\n".join(_source_text(row[0]) for row in pairs)
-    lede = fit_lede(clean_line(str(payload.get("lede") or ""), limit=420), since, until)
-    if _DANGLING_END.search(lede or ""):
-        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
-    check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if not line_is_grounded(check or lede, combined, analysis=True):
-        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
-    return lede, pairs
+        raise _not_publishing(exc) from exc
