@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.models import Article, BriefingItem, FetchReport, Issue
-from src.newsletter import render_email, render_mdx, render_slack, slack_contains_story
+from src.newsletter import _pt_stamp, render_email, render_mdx, render_slack, slack_contains_story
 from src.summarize import SchemaError, _rank_prompt, compose_briefing
 
 
@@ -123,6 +123,15 @@ def test_window_start_overrides_the_previous_slot(monkeypatch):
     assert code == 0
     assert seen["since"] == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
     assert seen["until"] == datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
+
+
+def test_pacific_stamp_keeps_monday_morning_on_monday():
+    assert _pt_stamp(datetime(2026, 10, 19, 10, 6, tzinfo=timezone.utc)) == "Mon Oct 19, 3:06 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 5:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 6:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)) == "Tue Oct 20, 6:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 15, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 8:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc)) == "Tue Oct 20, 11:00 AM PT"
 
 
 def test_window_end_dates_match_the_mwf_cadence():

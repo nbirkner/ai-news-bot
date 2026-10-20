@@ -156,6 +156,29 @@ def test_in_window():
     assert not in_window(datetime(2026, 10, 1, tzinfo=timezone.utc), since, now)
 
 
+def test_monday_morning_pt_is_outside_and_tuesday_morning_is_inside():
+    """Mon Oct 19 8:00 AM PT through Tue Oct 20 11:00 AM PT.
+
+    Early Monday is before the open. The same clock time on Tuesday is inside.
+    """
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    until = datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
+    monday_306am = datetime(2026, 10, 19, 10, 6, tzinfo=timezone.utc)
+    monday_5am = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
+    monday_6am = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)
+    tuesday_306am = datetime(2026, 10, 20, 10, 6, tzinfo=timezone.utc)
+    tuesday_5am = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    tuesday_6am = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)
+    assert not in_window(monday_306am, since, until)
+    assert not in_window(monday_5am, since, until)
+    assert not in_window(monday_6am, since, until)
+    assert in_window(tuesday_306am, since, until)
+    assert in_window(tuesday_5am, since, until)
+    assert in_window(tuesday_6am, since, until)
+    assert in_window(since, since, until)
+    assert in_window(until, since, until)
+
+
 def test_enrich_fills_a_thin_preview():
     item = Article(
         url="https://www.anthropic.com/news/example",
