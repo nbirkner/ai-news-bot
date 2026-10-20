@@ -25,7 +25,8 @@ DISCOVERY_QUERIES = (
     "LLM inference GPU custom chip or serving stack announcement",
     "open weights language model release",
     "AI regulation federal bill lawsuit or export control",
-    "AI lab funding round valuation or acquisition",
+    "AI lab funding round valuation acquisition revenue ARR or IPO",
+    "frontier AI lab revenue lawsuit child safety or policy change",
     "AI agent product launch security incident or leaked API key",
     "AI data center power grid energy deal",
 )

@@ -84,6 +84,37 @@ def _why_for(article: Article) -> str:
     return _WHY[topic_for(article)]
 
 
+_FILLER_WHY = re.compile(
+    r"\b("
+    r"worth a look|"
+    r"for people building with ai|"
+    r"changes what a product can do|"
+    r"changes the constraints on shipping|"
+    r"changes the risks you have to plan for|"
+    r"can shift who has the models|"
+    r"affects the cost and latency|"
+    r"changes how models connect to tools|"
+    r"a research result worth|"
+    r"matters only when it changes how models are deployed|"
+    r"if you ship or run models"
+    r")\b",
+    re.I,
+)
+
+
+def is_filler_why(line: str) -> bool:
+    """Category slogans. A why-line has to name this story."""
+    return bool(_FILLER_WHY.search(line or ""))
+
+
+def specific_why(article: Article) -> str:
+    """One line a builder or an exec could repeat. Uses the headline, no new facts."""
+    title = clean_line(article.title).rstrip(".")
+    if not title:
+        return ""
+    return f"A builder or an AI exec would bring up {title} this week."
+
+
 def topic_for(article: Article) -> str:
     text = f"{article.title} {article.content_preview}"
     for name, pattern in _TOPICS:
@@ -349,18 +380,24 @@ def _rank_prompt(articles: list, recent: list, limit: int) -> str:
     ]
     return f"""You rank and write one public AI news briefing for people building with AI.
 
-Compare the candidates against each other. Order is not a ranking.
-Choose stories that change what someone can ship, what it costs to run a model, or what they have to comply with.
-Prefer a material story over a routine patch note. Include a release note only when the text names a concrete change that matters this week.
+The bar for keeping a story: would a builder or an AI exec bring it up this week?
+Prefer, in this order:
+1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, or DeepSeek.
+2. Big money: revenue, ARR, a funding round, or an IPO path, when the text states the figure.
+3. Policy that changes the rules people ship under (a lawsuit, a statute, an export rule, a safety order).
+4. An infrastructure shift that changes what it costs or how a team serves a model this week.
+Skip routine patch notes, office openings, customer case studies, market blurbs, and commentary that does not change what someone can ship, pay, or comply with.
+Include a release note only when the text names a concrete change a team would act on this week.
 Skip a note that only says new features or bug fixes.
 Skip stories that are already in the recent briefings unless the new piece is a real development.
-Return between 4 and {limit} items when that many are genuinely material. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
-Public sources only. Do not mention private customers, revenue, or internal names.
+Return between 4 and {limit} items when that many clear the bar. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
+Public sources only. Do not mention a vendor's private customer list or unpublished revenue. Public revenue, ARR, funding, and IPO figures stay when that item's text states them. Do not add a name or number that is not in that item's text.
+A hard number stays only when it appears in that item's text. Prefer the lab's own post or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press) over a recap that does not show the figure. If the text says a figure is company-reported or unaudited, keep that caveat.
 
 For each chosen item:
 - headline: a specific claim a reader can scan. Not a bare version number.
-- body: 3 to 5 sentences of concrete facts from that item's text only. A body under 3 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Keep a caveat when the text says a figure is company-reported or unaudited. If the text cannot support 3 factual sentences, omit the item. Do not return a one-sentence or two-sentence body.
-- why_it_matters: one sentence for people building with AI. Interpretation is allowed. New facts are not.
+- body: 3 to 5 sentences of prose from that item's text only. A body under 3 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. If the text cannot support 3 factual sentences, omit the item. Do not return a one-sentence or two-sentence body. Do not paste a table, a markdown heading, or the raw page.
+- why_it_matters: one specific sentence naming the consequence for this story (the number, the rule, the product, or the cost). Interpretation is allowed. New facts are not. No filler. Do not write "worth a look" or a generic line about people building with AI.
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
@@ -409,6 +446,8 @@ def factual_body(article: Article) -> str:
         if cleaned.lower().rstrip(".") == title:
             continue
         if _THIN_RELEASE.search(cleaned) and not re.search(r"\d", cleaned):
+            continue
+        if cleaned.startswith("|") or cleaned.lower().startswith("license:"):
             continue
         seen.add(key)
         kept.append(cleaned)
@@ -483,9 +522,15 @@ def _schema_or_retry(payload, prompt: str, api_key: str, model: str):
         return retried
 
 
+_MARKDOWN_DUMP = re.compile(r"(\| ---|```|^# |license:\s*mit)", re.I | re.M)
+
+
 def _publishable_body(body: str, article: Article) -> str:
     """Keep grounded sentences. If that filter leaves under 3, use the source."""
     grounded = _grounded_body(body, article)
+    # A model card paste is not a briefing. Prefer sentences taken from the page.
+    if _MARKDOWN_DUMP.search(grounded or ""):
+        grounded = ""
     if len(split_sentences(grounded)) >= 3:
         return grounded
     sourced = factual_body(article)
@@ -573,6 +618,10 @@ def compose_briefing(
         headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
         body = _publishable_body(str(row.get("body") or ""), article)
         why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=why_fb)
+        if is_filler_why(why):
+            cited = specific_why(article)
+            if line_is_grounded(cited, _source_text(article), analysis=True):
+                why = cited
         pairs.append((article, headline, body, why))
         if len(pairs) >= limit:
             break

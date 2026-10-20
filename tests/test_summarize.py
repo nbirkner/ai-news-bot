@@ -259,6 +259,15 @@ def test_grounding_that_drops_sentences_falls_back_to_the_source():
     assert "Pat Pending" not in body
 
 
+def test_filler_why_names_the_story_instead_of_a_slogan():
+    from src.summarize import is_filler_why, specific_why
+    slogan = "For people building with AI, this is worth a look if you ship or run models."
+    assert is_filler_why(slogan)
+    line = specific_why(_article("Claude traces in OpenTelemetry beta", "Claude traces in OpenTelemetry beta."))
+    assert "Claude traces" in line
+    assert not is_filler_why(line)
+
+
 def test_extractive_uses_a_source_why_line_when_it_is_present():
     article = _article(
         "AI tools are aiding would-be spies",

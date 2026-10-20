@@ -78,6 +78,9 @@ def test_rank_prompt_has_no_together_angle():
     assert "together ai" not in prompt
     assert "headline" in prompt
     assert "3 to 5" in prompt
+    assert "bring it up this week" in prompt
+    assert "revenue" in prompt
+    assert "worth a look" in prompt
 
 
 def test_schema_failure_raises_when_a_full_body_is_required(monkeypatch):

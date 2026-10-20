@@ -154,7 +154,8 @@ def hard_noise(article) -> bool:
     return False
 
 
-_BUCKET_ORDER = ("model", "agents", "infra", "policy", "money", "other")
+# Money and rule changes outrank patch notes when the shortlist is tight.
+_BUCKET_ORDER = ("money", "policy", "model", "infra", "agents", "other")
 
 
 def bucket_for(article) -> str:
