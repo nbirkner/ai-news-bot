@@ -12,7 +12,7 @@ max_per_source: 8
 max_per_source_in_briefing: 2
 max_per_signature: 1
 # How many deduped candidates get full text before the model ranks them.
-read_candidates: 15
+read_candidates: 20
 read_full_text: true
 llm_rank: true
 theme_lede: true
@@ -55,6 +55,20 @@ sources:
     domain: ai.meta.com
     kind: lab
     priority: 1
+  - name: Meta Engineering
+    url: "https://engineering.fb.com/feed/"
+    type: rss
+    domain: engineering.fb.com
+    kind: lab
+    priority: 1
+    require_ai: true
+  - name: MiniMax
+    url: "https://www.minimax.io/blog"
+    type: blog
+    domain: minimax.io
+    kind: lab
+    priority: 1
+    max_results: 4
   - name: Mistral
     url: "https://mistral.ai/news/rss"
     type: rss
@@ -73,6 +87,43 @@ sources:
     domain: reuters.com
     kind: news
     priority: 2
+    pages: 6
+  - name: Investing.com
+    url: "https://www.investing.com/rss/news_25.rss"
+    type: rss
+    domain: investing.com
+    kind: news
+    priority: 2
+    require_ai: true
+  - name: Wire desk
+    url: "https://news.google.com/rss/search"
+    type: google_news
+    domain: news.google.com
+    kind: news
+    priority: 2
+    max_results: 12
+    # Reuters and Investing.com only keep the latest items. PYMNTS reprints wires
+    # on a page a fetch can read when the wire itself blocks.
+    domains:
+      - reuters.com
+      - investing.com
+      - pymnts.com
+      - techcrunch.com
+      - cnbc.com
+      - politico.com
+      - theverge.com
+      - axios.com
+  - name: Federal Register
+    url: "https://www.federalregister.gov/api/v1/documents.json"
+    type: federal_register
+    domain: federalregister.gov
+    kind: news
+    priority: 1
+    agencies:
+      - homeland-security-department
+      - commerce-department
+      - federal-trade-commission
+      - management-and-budget-office
   - name: vLLM
     url: "https://github.com/vllm-project/vllm/releases.atom"
     type: rss

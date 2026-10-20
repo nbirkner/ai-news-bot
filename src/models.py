@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -37,6 +37,7 @@ class Issue:
     items: list
     since: datetime | None = None
     until: datetime | None = None
+    also_in_window: tuple = ()  # titles that were in the window and did not make the list
 
 
 @dataclass
@@ -44,3 +45,4 @@ class FetchReport:
     articles: list
     failures: list
     successes: int
+    prior: list = field(default_factory=list)

@@ -30,18 +30,60 @@ _QUOTE_RE = re.compile(r"[\"“]([^\"”]{3,})[\"”]")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)+|\d[\d,]*")
 
 
+_CHROME_PHRASE = re.compile(
+    r"\b(skip navigation|skip to (?:main )?content|watch now|livestream menu|"
+    r"investing club|all rights reserved|sign up for our)\b",
+    re.I,
+)
+_LEADING_NAV = re.compile(
+    r"(?is)^.{0,160}?\bskip navigation\b.*?(?:\.|\n)\s*"
+)
+_DATELINE = re.compile(
+    r"^(?:published|updated)\b.{0,120}\b(?:EDT|EST|ET|PDT|PST|PT|UTC|[AP]M)\b",
+    re.I,
+)
+
+
 def collapse_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+def unescape_text(text: str) -> str:
+    """Decode entities twice so a literal ``&amp;`` does not survive."""
+    current = text or ""
+    for _ in range(2):
+        nxt = html.unescape(current)
+        if nxt == current:
+            break
+        current = nxt
+    return current
+
+
+def scrub_copy(text: str) -> str:
+    """Drop nav chrome and datelines, and decode HTML entities."""
+    cleaned = unescape_text(collapse_ws(text or ""))
+    if not cleaned:
+        return ""
+    if _CHROME_PHRASE.search(cleaned[:200]):
+        stripped = _LEADING_NAV.sub("", cleaned, count=1)
+        if stripped != cleaned:
+            cleaned = stripped
+    kept = []
+    for sentence in split_sentences(cleaned):
+        if _CHROME_PHRASE.search(sentence) or _DATELINE.search(sentence):
+            continue
+        kept.append(sentence)
+    return " ".join(kept)
 
 
 def plain_text(raw: str) -> str:
     """Strip tags without pulling in a parser. Fetch paths use BeautifulSoup."""
     text = re.sub(r"<[^>]+>", " ", raw or "")
-    return collapse_ws(html.unescape(text))
+    return collapse_ws(unescape_text(text))
 
 
 def clean_line(text: str, limit: int = 220) -> str:
-    text = html.unescape(text or "")
+    text = unescape_text(text or "")
     text = text.replace("\u2014", ", ").replace("\u2013", ", ")
     text = text.replace("—", ", ").replace("–", ", ")
     text = text.replace("*", "")
@@ -71,7 +113,7 @@ def split_sentences(text: str) -> list:
 
 
 def first_sentence(text: str) -> str:
-    text = html.unescape(text or "")
+    text = unescape_text(text or "")
     text = text.replace("\u2014", ", ").replace("\u2013", ", ")
     text = text.replace("—", ", ").replace("–", ", ")
     text = collapse_ws(text)
@@ -89,7 +131,7 @@ def shares_distinctive_word(left: str, right: str) -> bool:
 
 
 def is_thin_preview(preview: str, title: str) -> bool:
-    body = collapse_ws(html.unescape(preview or "")).strip().lower().strip(".")
+    body = collapse_ws(unescape_text(preview or "")).strip().lower().strip(".")
     if body in {"", "tbd", "overview", "undefined", "null", "none"}:
         return True
     if len(body) < 40:
@@ -99,7 +141,7 @@ def is_thin_preview(preview: str, title: str) -> bool:
 
 
 def tokens(text: str) -> list:
-    text = html.unescape(text or "").lower().replace("’", "'").replace("`", "'")
+    text = unescape_text(text or "").lower().replace("’", "'").replace("`", "'")
     text = re.sub(r"[^a-z0-9\s-]", " ", text)
     out = []
     for word in text.split():

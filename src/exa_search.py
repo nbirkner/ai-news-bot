@@ -25,7 +25,8 @@ DISCOVERY_QUERIES = (
     "LLM inference GPU custom chip or serving stack announcement",
     "open weights language model release",
     "AI regulation federal bill lawsuit or export control",
-    "AI lab funding round valuation or acquisition",
+    "AI lab funding round valuation acquisition revenue ARR or IPO",
+    "frontier AI lab revenue lawsuit child safety or policy change",
     "AI agent product launch security incident or leaked API key",
     "AI data center power grid energy deal",
 )
@@ -66,6 +67,14 @@ _HOSTS = (
     ("fortune.com", "Fortune", "news", 2),
     ("theverge.com", "The Verge", "news", 3),
     ("axios.com", "Axios", "news", 3),
+    ("investing.com", "Investing.com", "news", 2),
+    ("federalregister.gov", "Federal Register", "news", 1),
+    ("engineering.fb.com", "Meta Engineering", "lab", 1),
+    ("minimax.io", "MiniMax", "lab", 1),
+    ("pymnts.com", "PYMNTS", "news", 3),
+    ("finance.yahoo.com", "Yahoo Finance", "news", 2),
+    ("news.yahoo.com", "Yahoo", "news", 2),
+    ("marketscreener.com", "MarketScreener", "news", 3),
 )
 
 

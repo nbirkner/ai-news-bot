@@ -9,7 +9,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from src.clean import collapse_ws, is_thin_preview, shares_distinctive_word
+from src.clean import collapse_ws, is_thin_preview, scrub_copy, shares_distinctive_word
 from src.models import Article, FetchReport
 
 HEADERS = {
@@ -21,7 +21,8 @@ AI_TERMS = re.compile(
     r"\b(ai|a\.i\.|artificial intelligence|openai|anthropic|deepmind|gemini|"
     r"chatgpt|gpt-\d|claude|llms?|machine learning|nvidia|gpu|mistral|"
     r"vllm|sglang|deepseek|qwen|kimi|moonshot|tenstorrent|huggingface|"
-    r"data centers?|datacenters?|chips?|semiconductor|inference)\b",
+    r"data centers?|datacenters?|chips?|semiconductor|inference|"
+    r"agents?|minimax|supercluster|gigawatt)\b",
     re.I,
 )
 SKIP_REUTERS_PATH = re.compile(
@@ -163,8 +164,24 @@ def articles_from_feed(source: dict, content: bytes) -> list:
         if link in seen:
             continue
         seen.add(link)
-        articles.append(_article(source, link, title, published, preview))
+        article = _article(source, link, title, published, preview)
+        body = _entry_body(entry)
+        if len(body) > len(article.content_preview or ""):
+            article.full_text = body[:12000]
+            if len(article.content_preview or "") < 80:
+                article.content_preview = body[:500]
+        articles.append(article)
     return articles
+
+
+def _entry_body(entry) -> str:
+    chunks = []
+    for block in entry.get("content") or []:
+        if isinstance(block, dict) and block.get("value"):
+            chunks.append(block["value"])
+    if not chunks and entry.get("summary"):
+        chunks.append(entry.summary)
+    return _plain(" ".join(chunks))
 
 
 def fetch_rss(source: dict) -> list:
@@ -223,9 +240,94 @@ def parse_reuters_sitemap(source: dict, content: bytes) -> list:
     return articles
 
 
+def headlines_not_in(candidates: list, existing: list, cap: int) -> list:
+    """Wires the sitemap has already dropped. Same headline stays one story."""
+    from src.dedupe import jaccard
+    fresh = []
+    for article in candidates:
+        if any(jaccard(article.title, old.title) >= 0.55 for old in existing):
+            continue
+        fresh.append(article)
+    return rank_wire_headlines(fresh, cap)
+
+
+def _reuters_rolloff(source: dict, existing: list) -> list:
+    """Google News keeps a Reuters wire after it rolls off the news sitemap."""
+    since = source.get("_since")
+    until = source.get("_until")
+    query = (
+        "site:reuters.com (OpenAI OR Anthropic OR DeepSeek OR Nvidia) "
+        "(billion OR fundraising OR lawsuit OR ban) when:2d"
+    )
+    try:
+        response = http_get("https://news.google.com/rss/search", params={
+            "q": query,
+            "hl": "en-US",
+            "gl": "US",
+            "ceid": "US:en",
+        })
+    except Exception as exc:
+        print(f"Warning: Reuters rolloff search failed: {exc}", file=sys.stderr)
+        return []
+    feed = feedparser.parse(response.content)
+    stubs = []
+    for entry in feed.entries:
+        title = _plain(entry.get("title") or "")
+        title = re.sub(r"\s+-\s+[^-]+$", "", title).strip()
+        published = _entry_datetime(entry)
+        link = _entry_link(entry)
+        if not title or published is None or not link:
+            continue
+        if not _mostly_english(title) or not AI_TERMS.search(title):
+            continue
+        if since is not None and until is not None and not in_window(published, since, until):
+            continue
+        stubs.append(_article(source, link, title, published))
+    chosen = headlines_not_in(stubs, existing, 5)
+    articles = []
+    for stub in chosen:
+        try:
+            url = decode_google_news_url(stub.url)
+        except Exception as exc:
+            print(f"Warning: Reuters rolloff decode failed: {exc}", file=sys.stderr)
+            continue
+        host = _host(url)
+        # Decode sometimes lands on the Yahoo or MarketScreener copy of the wire.
+        syndication = any(bit in host for bit in ("yahoo.com", "marketscreener.com", "pymnts.com"))
+        if not url or ("reuters.com" not in host and not syndication):
+            continue
+        excerpt, via, _via_name, _via_domain = _readable_excerpt(url, stub.title)
+        # Keep the Reuters label. The readable URL may be a syndication copy.
+        article = _article(source, via or url, stub.title, stub.published_at, excerpt or stub.title)
+        if len(excerpt) >= 200:
+            article.full_text = excerpt
+            article.content_preview = excerpt[:500]
+        articles.append(article)
+    return articles
+
+
 def fetch_reuters(source: dict) -> list:
-    response = http_get(source["url"])
-    return parse_reuters_sitemap(source, response.content)
+    """The news sitemap is a rolling window. Read several pages, not only the latest 50."""
+    pages = max(1, int(source.get("pages", 6)))
+    seen = set()
+    articles = []
+    for index in range(pages):
+        url = source["url"]
+        if index:
+            joiner = "&" if "?" in url else "?"
+            url = f"{url}{joiner}from={index * 100}"
+        response = http_get(url)
+        for article in parse_reuters_sitemap(source, response.content):
+            if article.url in seen:
+                continue
+            seen.add(article.url)
+            articles.append(article)
+    for article in _reuters_rolloff(source, articles):
+        if article.url in seen:
+            continue
+        seen.add(article.url)
+        articles.append(article)
+    return articles
 
 
 def parse_anthropic_html(source: dict, html: str) -> list:
@@ -371,12 +473,370 @@ def fetch_html(source: dict) -> list:
     return parser(source, response.text)
 
 
+def _date_only_to_morning(published: datetime) -> datetime:
+    """A calendar date with no clock time. Put it at 15:00 UTC, 8:00 AM Pacific in October."""
+    if (
+        published.hour == 0
+        and published.minute == 0
+        and published.second == 0
+        and published.microsecond == 0
+    ):
+        return published.replace(hour=15)
+    return published
+
+
+def _page_title(raw: str) -> str:
+    soup = BeautifulSoup(raw or "", "html.parser")
+    for attrs in ({"property": "og:title"}, {"name": "twitter:title"}):
+        tag = soup.find("meta", attrs=attrs)
+        content = (tag.get("content") if tag else "") or ""
+        title = _plain(content)
+        if len(title) >= 12:
+            return title
+    if soup.title and soup.title.string:
+        return _plain(soup.title.string)
+    return ""
+
+
+def _page_published(raw: str) -> datetime | None:
+    match = re.search(
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        raw or "",
+    )
+    if not match:
+        match = re.search(r'"publishedAt"\s*:\s*"([^"]+)"', raw or "")
+    if not match:
+        return None
+    published = parse_iso(match.group(1))
+    if published is None and re.fullmatch(r"\d{4}-\d{2}-\d{2}", match.group(1)[:10]):
+        published = parse_iso(match.group(1)[:10] + "T00:00:00Z")
+    if published is None:
+        return None
+    return _date_only_to_morning(published)
+
+
+def parse_blog_index(source: dict, html: str, getter=None) -> list:
+    """Company blog index. Dates live on the posts, not the index."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    urls = []
+    seen = set()
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if "/blog/" not in href:
+            continue
+        url = urljoin(source.get("url") or "", href)
+        path = urlparse(url).path.rstrip("/")
+        if path.endswith("/blog") or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    getter = getter or (lambda url: http_get(url).text)
+    limit = int(source.get("max_results", 4))
+    articles = []
+    for url in urls[:limit]:
+        try:
+            page = getter(url)
+        except Exception as exc:
+            print(f"Warning: blog post fetch failed for {url}: {exc}", file=sys.stderr)
+            continue
+        title = _page_title(page)
+        published = _page_published(page)
+        if len(title) < 12 or published is None:
+            continue
+        title = re.split(r"\s+[|\-–—]\s+", title, maxsplit=1)[0].strip() or title
+        articles.append(_article(source, url, title, published, meta_description(page) or title))
+    return articles
+
+
+def fetch_blog(source: dict) -> list:
+    response = http_get(source["url"])
+    return parse_blog_index(source, response.text)
+
+
+def parse_federal_register(source: dict, payload) -> list:
+    """Keep AI-related documents from a Federal Register API response."""
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+    articles = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = collapse_ws(row.get("title") or "")
+        abstract = collapse_ws(row.get("abstract") or "")
+        url = (row.get("html_url") or "").strip()
+        published_raw = (row.get("publication_date") or "").strip()
+        if not title or not url or not published_raw or url in seen:
+            continue
+        if not AI_TERMS.search(f"{title} {abstract}"):
+            continue
+        published = parse_iso(published_raw + "T16:00:00Z")
+        if published is None:
+            continue
+        seen.add(url)
+        excerpts = row.get("excerpts") or ""
+        if isinstance(excerpts, list):
+            excerpts = " ".join(str(part) for part in excerpts)
+        text = collapse_ws(f"{abstract} {excerpts}")
+        article = _article(source, url, title, published, abstract or title)
+        if len(text) >= 80:
+            article.full_text = text[:12000]
+            article.content_preview = text[:500]
+        articles.append(article)
+    return articles
+
+
+def fetch_federal_register(source: dict) -> list:
+    since = source.get("_since")
+    until = source.get("_until")
+    agencies = source.get("agencies") or []
+    articles = []
+    seen = set()
+    for agency in agencies:
+        params = {
+            "per_page": int(source.get("max_results", 20)),
+            "order": "newest",
+            "conditions[agencies][]": agency,
+        }
+        if since is not None:
+            params["conditions[publication_date][gte]"] = since.date().isoformat()
+        if until is not None:
+            params["conditions[publication_date][lte]"] = until.date().isoformat()
+        try:
+            payload = http_get(source["url"], params=params).json()
+        except Exception as exc:
+            print(f"Warning: Federal Register {agency} failed: {exc}", file=sys.stderr)
+            continue
+        for article in parse_federal_register(source, payload):
+            if article.url in seen:
+                continue
+            seen.add(article.url)
+            articles.append(article)
+    return articles
+
+
+# Publisher hosts a wire-desk search is allowed to resolve. The query stays
+# thematic. Reuters and Investing.com feeds only keep the latest items, and
+# their article pages often block a fetch, so a readable wire recap is included.
+_WIRE_HOSTS = {
+    "reuters.com": ("Reuters", "news", 2),
+    "investing.com": ("Investing.com", "news", 2),
+    "pymnts.com": ("PYMNTS", "news", 3),
+    "techcrunch.com": ("TechCrunch", "news", 2),
+    "cnbc.com": ("CNBC", "news", 2),
+    "politico.com": ("Politico", "news", 2),
+    "theverge.com": ("The Verge", "news", 3),
+    "axios.com": ("Axios", "news", 3),
+}
+
+
+def _host(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _wire_label(host: str):
+    for suffix, label in _WIRE_HOSTS.items():
+        if host == suffix or host.endswith("." + suffix):
+            return label
+    return None
+
+
+def decode_google_news_url(article_url: str) -> str:
+    """Resolve a news.google.com article link to the publisher URL. Empty on failure."""
+    match = re.search(r"/articles/([^/?#]+)", article_url or "")
+    if not match:
+        return ""
+    art_id = match.group(1)
+    page = http_get(
+        f"https://news.google.com/rss/articles/{art_id}",
+        params={"hl": "en-US", "gl": "US", "ceid": "US:en"},
+    )
+    signature = re.search(r'data-n-a-sg="([^"]+)"', page.text)
+    timestamp = re.search(r'data-n-a-ts="([^"]+)"', page.text)
+    if not signature or not timestamp:
+        return ""
+    inner = [
+        "garturlreq",
+        [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1, None, None, None, None, None, 0, 1],
+         "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+        art_id,
+        int(timestamp.group(1)),
+        signature.group(1),
+    ]
+    import json
+    from urllib.parse import quote
+    body = "f.req=" + quote(json.dumps([[["Fbv4je", json.dumps(inner, separators=(",", ":")), None, "0"]]], separators=(",", ":")))
+    response = requests.post(
+        "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+        data=body,
+        headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    found = re.search(r"https://[^\"\\]+", response.text)
+    return found.group(0) if found else ""
+
+
+def _syndication_excerpt(title: str, url: str) -> tuple:
+    """Yahoo, PYMNTS, or MarketScreener copy when the wire page returns 403."""
+    from src.read import _host as read_host
+    from src.read import _syndication_label, syndication_text
+    text, via = syndication_text(title, url)
+    if len(text) >= 200 and via:
+        return text, via, _syndication_label(via), read_host(via)
+    return "", url, "", ""
+
+
+def _readable_excerpt(url: str, title: str = "") -> tuple:
+    """(text, url, source_name, domain). Source fields are set only for a syndication copy."""
+    host = _host(url)
+    blocked = any(host == bit or host.endswith("." + bit) for bit in (
+        "reuters.com", "politico.com", "wsj.com", "ft.com", "bloomberg.com", "nytimes.com",
+        "investing.com",
+    ))
+    if blocked:
+        # Investing.com 403s the same way Reuters does. Use the MarketScreener copy.
+        if title and ("reuters.com" in host or "investing.com" in host):
+            return _syndication_excerpt(title, url)
+        return "", url, "", ""
+    try:
+        raw = http_get(url).text
+    except Exception as exc:
+        print(f"Warning: wire page fetch failed for {url}: {exc}", file=sys.stderr)
+        from src.read import _access_denied
+        if title and _access_denied(exc):
+            return _syndication_excerpt(title, url)
+        return "", url, "", ""
+    soup = BeautifulSoup(raw, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer", "noscript"]):
+        tag.decompose()
+    return scrub_copy(collapse_ws(soup.get_text(" ", strip=True)))[:4000], url, "", ""
+
+
+def rank_wire_headlines(articles: list, cap: int) -> list:
+    """Decode Reuters before a later PYMNTS recap. A generic deal takes no slot."""
+    from src.dedupe import _wire_rank
+    from src.rank import hard_noise, score_article
+    eligible = [article for article in articles if not hard_noise(article)]
+    eligible.sort(
+        key=lambda article: (
+            score_article(article),
+            -_wire_rank(article),
+            article.published_at.timestamp(),
+        ),
+        reverse=True,
+    )
+    return eligible[:cap]
+
+
+def fetch_google_news(source: dict) -> list:
+    """Find wire copy that has already rolled off a short RSS or sitemap."""
+    since = source.get("_since")
+    until = source.get("_until")
+    domains = source.get("domains") or list(_WIRE_HOSTS)
+    sites = " OR ".join(f"site:{domain}" for domain in domains)
+    now = datetime.now(timezone.utc)
+    age_days = 2
+    if since is not None:
+        age_days = max(2, min(7, (now - since).days + 1))
+    query = source.get("query") or (
+        f"({sites}) (OpenAI OR Anthropic OR DeepSeek OR Nvidia OR Microsoft OR Meta "
+        f'OR Mistral OR "AI agents" OR "artificial intelligence") when:{age_days}d'
+    )
+    response = http_get(source["url"], params={
+        "q": query,
+        "hl": "en-US",
+        "gl": "US",
+        "ceid": "US:en",
+    })
+    feed = feedparser.parse(response.content)
+    cap = int(source.get("max_results", 12))
+    pending = []
+    for entry in feed.entries:
+        title = _plain(entry.get("title") or "")
+        title = re.sub(r"\s+-\s+[^-]+$", "", title).strip()
+        published = _entry_datetime(entry)
+        link = _entry_link(entry)
+        if not title or published is None or not link:
+            continue
+        if not _mostly_english(title) or not AI_TERMS.search(title):
+            continue
+        if since is not None and until is not None and not in_window(published, since, until):
+            continue
+        origin = ""
+        if getattr(entry, "source", None):
+            origin = entry.source.get("href") or ""
+        label = _wire_label(_host(origin))
+        if label is None:
+            continue
+        pending.append((title, published, link, label, _host(origin)))
+    # Decode the headlines a builder would rank first. Reuters comes ahead of
+    # a later PYMNTS recap so the wire, not the rewrite, is what we read.
+    stubs = []
+    for title, published, link, label, host in pending:
+        name, kind, priority = label
+        stubs.append(_article(
+            {"name": name, "domain": host or "example.com", "kind": kind, "priority": priority},
+            link,
+            title,
+            published,
+        ))
+    articles = []
+    seen = set()
+    for stub in rank_wire_headlines(stubs, cap):
+        title = stub.title
+        published = stub.published_at
+        link = stub.url
+        label = (stub.source_name, stub.source_kind, stub.source_priority)
+        if len(articles) >= cap:
+            break
+        try:
+            url = decode_google_news_url(link)
+        except Exception as exc:
+            print(f"Warning: wire link decode failed: {exc}", file=sys.stderr)
+            continue
+        resolved = _wire_label(_host(url)) or label
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        name, kind, priority = resolved
+        wired = {
+            "name": name,
+            "domain": _host(url),
+            "kind": kind,
+            "priority": priority,
+        }
+        origin_host = _host(url)
+        excerpt, via, via_name, via_domain = _readable_excerpt(url, title)
+        if via and via != url:
+            url = via
+            # A Reuters page that 401s stays Reuters when the readable copy is Yahoo.
+            if "reuters.com" not in origin_host:
+                if via_name:
+                    name = via_name
+                if via_domain:
+                    wired = dict(wired, domain=via_domain, name=name)
+        article = _article(wired, url, title, published, excerpt or title)
+        if len(excerpt) >= 200:
+            article.full_text = excerpt
+            article.content_preview = excerpt[:500]
+        articles.append(article)
+    return articles
+
+
 _FETCHERS = {
     "rss": fetch_rss,
     "reuters": fetch_reuters,
     "arxiv": fetch_arxiv,
     "html": fetch_html,
     "huggingface": fetch_huggingface,
+    "federal_register": fetch_federal_register,
+    "google_news": fetch_google_news,
+    "blog": fetch_blog,
 }
 
 
@@ -392,29 +852,56 @@ def fetch_all(config: dict, since: datetime, now: datetime | None = None) -> Fet
     now = now or datetime.now(timezone.utc)
     max_per_source = int(config.get("max_per_source", 8))
     articles = []
+    prior = []
     failures = []
     successes = 0
+    since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+    horizon = since_utc - timedelta(hours=18)
     for source in config["sources"]:
         fetcher = _FETCHERS.get(source.get("type", ""))
         if fetcher is None:
             failures.append(f"{source.get('name', '?')}: unknown type {source.get('type')}")
             continue
         try:
-            fetched = fetcher(source)
+            payload = dict(source)
+            payload["_since"] = since
+            payload["_until"] = now
+            fetched = fetcher(payload)
             successes += 1
         except Exception as exc:
             failures.append(f"{source['name']}: {exc}")
             print(f"Warning: {source['name']} failed: {exc}", file=sys.stderr)
             continue
-        fresh = [item for item in fetched if in_window(item.published_at, since, now)]
-        fresh.sort(key=lambda item: item.published_at, reverse=True)
-        kept = fresh[:max_per_source]
+        fresh = []
+        for item in fetched:
+            if in_window(item.published_at, since, now):
+                fresh.append(item)
+                continue
+            published = item.published_at
+            if published is None:
+                continue
+            if published.tzinfo is None:
+                published = published.replace(tzinfo=timezone.utc)
+            if horizon <= published < since_utc:
+                prior.append(item)
+        # A high-scoring Monday story should survive a source that also
+        # published eight quieter notes on Tuesday.
+        from src.rank import score_article
+        fresh.sort(
+            key=lambda item: (score_article(item), item.published_at.timestamp()),
+            reverse=True,
+        )
+        cap = max_per_source
+        if source.get("type") == "google_news":
+            # This source mixes several publishers and already ranked them.
+            cap = max(cap, int(source.get("max_results", cap)))
+        kept = fresh[:cap]
         print(
             f"{source['name']}: {len(kept)} in window ({len(fetched)} fetched)",
             file=sys.stderr,
         )
         articles.extend(kept)
-    return FetchReport(articles=articles, failures=failures, successes=successes)
+    return FetchReport(articles=articles, failures=failures, successes=successes, prior=prior)
 
 
 def meta_description(html: str) -> str:

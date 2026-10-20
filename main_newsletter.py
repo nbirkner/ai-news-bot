@@ -38,14 +38,29 @@ def main(argv=None) -> int:
         return 2
     raw_end = _flag(argv, "--window-end")
     if not raw_end:
-        print("Usage: python main_newsletter.py --dry-run --window-end 2026-10-19", file=sys.stderr)
+        print(
+            "Usage: python main_newsletter.py --dry-run "
+            "--window-end 2026-10-19 [--window-start 2026-10-19T15:00:00Z]",
+            file=sys.stderr,
+        )
         return 2
     try:
         until = parse_window_end(raw_end)
     except ValueError as exc:
         print(f"Could not parse --window-end: {exc}", file=sys.stderr)
         return 2
-    since = previous_mwf_slot(until)
+    raw_start = _flag(argv, "--window-start")
+    if raw_start:
+        try:
+            since = parse_window_end(raw_start)
+        except ValueError as exc:
+            print(f"Could not parse --window-start: {exc}", file=sys.stderr)
+            return 2
+        if since >= until:
+            print("--window-start must be earlier than --window-end", file=sys.stderr)
+            return 2
+    else:
+        since = previous_mwf_slot(until)
 
     config = yaml.safe_load(open("config.yaml"))
     override = (os.environ.get("TOGETHER_MODEL") or "").strip()
@@ -61,6 +76,7 @@ def main(argv=None) -> int:
         until=until,
         api_key=(os.environ.get("TOGETHER_API_KEY") or "").strip() or None,
         exa_api_key=(os.environ.get("EXA_API_KEY") or "").strip() or None,
+        recent_path=Path("state/recent_briefings.json"),
     )
     usage = format_usage(
         model=config.get("together_model") or "",
