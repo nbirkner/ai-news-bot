@@ -25,6 +25,13 @@ _INFRA = re.compile(
     r"\b(vllm|sg ?lang|inference|tensorrt|cuda|blackwell|gpu|chip|accelerator)\b",
     re.I,
 )
+_LAB_MONEY = re.compile(
+    r"\b(?:openai|anthropic)\b.{0,90}(?:\$\s?\d[\d.]*\s?(?:billion|bln)|net loss|\bloss\b|fundraising|\bipo\b)|"
+    r"(?:\$\s?\d[\d.]*\s?(?:billion|bln)|net loss|\bloss\b|fundraising|\bipo\b).{0,90}\b(?:openai|anthropic)\b|"
+    r"\bnscale\b.{0,80}\b(?:deal|talks|multibillion|\$\s?\d)|"
+    r"\b(?:deal|talks|multibillion)\b.{0,80}\bnscale\b",
+    re.I,
+)
 _DEAL = re.compile(
     r"\b(acqui(?:res|red|sition)|merger|funding round|series [a-e]|raises \$|"
     r"raise[sd]?\s+\$|fundraising|valuation|ipo)\b|"
@@ -105,6 +112,9 @@ def score_article(article) -> int:
         # A frontier-lab round outranks a generic $320 million financing.
         if re.search(r"\b(openai|anthropic)\b", title, re.I):
             score += 3
+    # A reported lab loss or a stated mega-deal outranks a serving-stack release.
+    if _LAB_MONEY.search(title):
+        score += 4
     if _AGENTS.search(title):
         score += 2
     if _OPEN_WEIGHTS.search(title) and not has_model:

@@ -425,6 +425,98 @@ def test_a_lede_cut_off_mid_phrase_is_replaced():
     assert lede.endswith(".")
 
 
+def test_a_generic_lede_is_replaced_with_the_top_stories():
+    from datetime import timedelta
+    from src.summarize import fit_lede, lede_names_stories, story_lede
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    until = since + timedelta(hours=27)
+    loss = _article(
+        "Anthropic logged net loss of over $80 billion",
+        "Anthropic logged a net loss of over $80 billion.",
+        kind="news",
+    )
+    nscale = _article(
+        "Nscale and Anthropic in talks for a $45 billion deal",
+        "Nscale and Anthropic are in talks.",
+        kind="news",
+    )
+    nscale.url = "https://www.reuters.com/nscale"
+    deep = _article(
+        "Federal agencies must remove DeepSeek from civilian systems",
+        "The order removes DeepSeek.",
+        kind="news",
+    )
+    deep.url = "https://www.federalregister.gov/deepseek"
+    rows = [
+        (loss, "Anthropic logged net loss of over $80 billion", "", ""),
+        (nscale, "Nscale and Anthropic in talks for a $45 billion deal", "", ""),
+        (deep, "Federal agencies must remove DeepSeek from civilian systems", "", ""),
+    ]
+    generic = "This window is mostly about funding and policy."
+    assert not lede_names_stories(generic, rows)
+    named = story_lede(rows)
+    assert "Anthropic" in named and "Nscale" in named and "DeepSeek" in named
+    assert "mostly about" not in named.lower()
+    assert lede_names_stories(named, rows)
+    fitted = fit_lede(named, since, until)
+    assert fitted.startswith("Since Monday morning")
+    assert "this week" not in fitted.lower()
+    assert "\u2013" not in fitted and "\u2014" not in fitted
+
+
+def test_a_major_deal_is_kept_ahead_of_llm_d():
+    from src.summarize import _backfill_clear_bar
+    loss = _article(
+        "Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    loss.url = "https://www.reuters.com/anthropic-loss"
+    loss.source_domain = "reuters.com"
+    loss.full_text = (
+        "Anthropic logged a net loss of over $80 billion in the first half of 2026. "
+        "The Wall Street Journal cited a draft prospectus shared with investors."
+    )
+    nscale = _article(
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal",
+        "Nscale is in talks with Anthropic.",
+        kind="news",
+    )
+    nscale.url = "https://www.reuters.com/nscale-anthropic"
+    nscale.source_domain = "reuters.com"
+    nscale.full_text = (
+        "Nscale is in talks with Anthropic on a cloud deal worth about $45 billion. "
+        "The talks cover a second site that would use Nvidia chips."
+    )
+    llmd = _article(
+        "llm-d v1.0 brings distributed inference to Kubernetes",
+        "llm-d v1.0 is a serving release.",
+        kind="release",
+    )
+    llmd.url = "https://github.com/llm-d/llm-d"
+    llmd.full_text = (
+        "llm-d v1.0 is a Kubernetes-native stack for serving a model across nodes. "
+        "The release adds a scheduler for distributed inference."
+    )
+    pairs = [(
+        llmd,
+        "llm-d v1.0 adds a scheduler",
+        llmd.full_text,
+        "Teams serving a model across nodes have a new scheduler to try.",
+    )]
+    ranked = _backfill_clear_bar([loss, nscale, llmd], pairs, limit=3)
+    titles = [row[0].title for row in ranked]
+    assert any("net loss" in title for title in titles)
+    assert any("Nscale" in title for title in titles)
+    assert titles[-1] == llmd.title
+    assert titles.index(loss.title) < titles.index(llmd.title)
+    tight = _backfill_clear_bar([loss, nscale, llmd], pairs, limit=2)
+    tight_titles = [row[0].title for row in tight]
+    assert llmd.title not in tight_titles
+    assert any("net loss" in title for title in tight_titles)
+    assert any("Nscale" in title for title in tight_titles)
+
+
 def test_a_short_window_lede_does_not_say_this_week():
     from datetime import timedelta
     from src.summarize import fit_lede
@@ -562,16 +654,20 @@ def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
     article.source_domain = "federalregister.gov"
     lead = _order_lead(article)
     why = _order_why(article)
-    assert lead.startswith("Order excludes and removes DeepSeek Products")
+    assert lead == "Federal agencies must remove DeepSeek from civilian systems."
     assert lead.endswith(".")
     assert lead != title
     assert "Notice of Order" not in lead
+    assert "Exclusion and Removal" not in lead
+    assert not lead.lower().startswith("order excludes")
     article.full_text = (
         "The order removes DeepSeek products and third-party products developed "
         "using DeepSeek from civilian agency information technology."
     )
     why = _order_why(article)
     assert "audit" in why.lower()
+    assert "DeepSeek" in why
+    assert why != "Vendors must audit which models sit under their products."
     assert "bring up" not in why
     from src.summarize import _usable_why
     paraphrase = "Vendors selling into federal agencies must check every product they offer."

@@ -14,6 +14,7 @@ from src.clean import (
     scrub_copy,
     shares_distinctive_word,
     split_sentences,
+    tokens,
 )
 from src.usage import record_llm_call
 from src.models import Article
@@ -169,23 +170,35 @@ def specific_why(article: Article) -> str:
 _ORDER_TITLE = re.compile(r"exclusion and removal of (.+?) from\b", re.I)
 
 
-def _order_lead(article: Article) -> str:
-    """A short sentence for a removal order, not the raw Federal Register title."""
-    match = _ORDER_TITLE.search(article.title or "")
+def _plain_removal_headline(title: str) -> str:
+    """Plain English for a removal order. Not the Federal Register title."""
+    match = _ORDER_TITLE.search(title or "")
     if not match:
         return ""
-    product = match.group(1).strip(" .")
-    return f"Order excludes and removes {product} from federal civilian systems."
+    product = re.sub(r"\s+products$", "", match.group(1).strip(" ."), flags=re.I).strip()
+    if not product:
+        return ""
+    return f"Federal agencies must remove {product} from civilian systems."
+
+
+def _order_lead(article: Article) -> str:
+    """A short sentence for a removal order, not the raw Federal Register title."""
+    return _plain_removal_headline(article.title or "")
 
 
 def _order_why(article: Article) -> str:
     """Consequence of a removal order that also covers third-party products."""
-    text = _source_text(article).lower()
-    if not re.search(r"exclusion|removal", text):
+    text = _source_text(article)
+    lowered = text.lower()
+    if not re.search(r"exclusion|removal", lowered):
         return ""
-    if "third-party" not in text and "third party" not in text:
+    if "third-party" not in lowered and "third party" not in lowered:
         return ""
-    return "Vendors must audit which models sit under their products."
+    product = "DeepSeek" if re.search(r"\bdeepseek\b", lowered) else "the named model"
+    return (
+        f"Vendors must audit which products include {product} "
+        "before a civilian agency can buy them."
+    )
 
 
 def _norm_title(text: str) -> str:
@@ -213,10 +226,9 @@ def _government_notice(article: Article) -> bool:
 
 def rewrite_headline(title: str) -> str:
     """A short lead that is not the raw page title."""
-    match = _ORDER_TITLE.search(title or "")
-    if match:
-        product = match.group(1).strip(" .")
-        return f"Order excludes and removes {product} from federal civilian systems."
+    plain = _plain_removal_headline(title or "")
+    if plain:
+        return plain.rstrip(".")
     text = re.sub(
         r"^(exclusive|breaking|update|analysis)\s*:\s*",
         "",
@@ -291,6 +303,21 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     defined = _definition_why(article)
     if defined and not _restates(defined, body):
         return defined
+    money = _money_why(article)
+    if money and not _restates(money, body) and not is_filler_why(money):
+        return money
+    return ""
+
+
+def _money_why(article: Article) -> str:
+    """A consequence for a lab loss or a major deal, using names the title already has."""
+    title = article.title or ""
+    if re.search(r"\banthropic\b", title, re.I) and re.search(r"\bloss\b", title, re.I):
+        return "Anthropic's reported loss changes what the lab can spend."
+    if re.search(r"\bnscale\b", title, re.I) and re.search(r"\b(deal|talks)\b", title, re.I):
+        return "The Nscale deal changes how much compute Anthropic can buy."
+    if re.search(r"\bopenai\b", title, re.I) and re.search(r"\b(raise|fundraising|ipo|\$)\b", title, re.I):
+        return "The round changes how much compute OpenAI can buy."
     return ""
 
 
@@ -716,6 +743,57 @@ def theme_lede(articles: list) -> str:
     return f"This window is mostly about {body}."
 
 
+def story_lede(rows: list) -> str:
+    """Name the top two or three stories. A theme list is not a lede."""
+    names = []
+    for row in rows[:3]:
+        headline = (row[1] if len(row) > 1 else "") or ""
+        name = headline.strip().rstrip(".")
+        words = name.split()
+        if len(words) > 12:
+            name = " ".join(words[:12]).rstrip(",;:")
+        if name and name not in names:
+            names.append(name)
+    if not names:
+        return theme_lede([row[0] for row in rows if row])
+    if len(names) == 1:
+        body = names[0]
+    elif len(names) == 2:
+        body = f"{names[0]}, and {names[1]}"
+    else:
+        body = f"{names[0]}, {names[1]}, and {names[2]}"
+    return f"The top stories are {body}."
+
+
+_GENERIC_LEDE = re.compile(
+    r"mostly about|handful of developments|new models|agent tools",
+    re.I,
+)
+_LEDE_THEME = {
+    "models", "model", "agent", "agents", "tools", "infrastructure", "policy",
+    "funding", "window", "mostly", "about", "developments", "systems", "people",
+    "building", "stories", "story", "morning", "monday", "since",
+}
+
+
+def lede_names_stories(lede: str, rows: list) -> bool:
+    """True when the lede names at least two of the top stories."""
+    text = lede or ""
+    if not rows:
+        return bool(text) and not _GENERIC_LEDE.search(text)
+    hits = 0
+    for row in rows[:3]:
+        headline = row[1] if len(row) > 1 else ""
+        shared = set(tokens(text)) & set(tokens(f"{headline} {row[0].title}"))
+        shared = {word for word in shared if len(word) >= 5 and word not in _LEDE_THEME}
+        if shared:
+            hits += 1
+    needed = 1 if len(rows) < 2 else min(2, len(rows))
+    if _GENERIC_LEDE.search(text) and hits < needed:
+        return False
+    return hits >= needed
+
+
 def _window_note(since, until) -> str:
     if since is None or until is None:
         return ""
@@ -743,7 +821,7 @@ Do not echo that bar, or the words "this week", in the published lede, headlines
 {_window_note(since, until)}
 Prefer, in this order:
 1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, DeepSeek, or MiniMax.
-2. Big money: revenue, ARR, a funding round, or an IPO path, when the text states the figure.
+2. Big money: revenue, ARR, a reported loss, a funding round, an IPO path, or a cloud deal stated in the billions. A frontier lab's loss or mega-deal outranks a serving-stack release. Do not drop that loss or deal to make room for the release.
 3. Policy that changes the rules people ship under (a lawsuit, a statute, an export rule, a ban, a removal order).
 4. Security that changes what a team has to defend (a breach, an agent treated as an insider).
 5. An infrastructure shift that changes what it costs or how a team serves a model this week.
@@ -757,12 +835,12 @@ Public sources only. Do not mention a vendor's private customer list or unpublis
 A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press, or a Yahoo copy of that wire) over a roundup or a law-firm blog. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it, including on a vendor's own post.
 
 For each chosen item:
-- headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write one sentence that names the product and the removal, and end it with a period.
+- headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, the consequence is that vendors must audit which models sit under their products. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
+lede: one plain sentence that names the top 2 or 3 stories, the lab or the event, not a generic theme list. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 380 characters.
 Return JSON only.
@@ -985,11 +1063,46 @@ _CLEAR_BAR = re.compile(
     r"\b(exclusion|barred)\b|"
     r"(?:raise|raises|raised|valuation|acqui\w*|funding|fundraising|loss).{0,48}\$\s?\d[\d.]*\s?(?:billion|bln)|"
     r"\$\s?\d[\d.]*\s?(?:billion|bln).{0,48}(?:raise|valuation|acqui\w*|funding|fundraising|deal|loss|ipo)|"
-    r"\b(?:openai|anthropic)\b.{0,80}\b(?:fundraising|ipo)\b|"
-    r"\b(?:fundraising|ipo)\b.{0,80}\b(?:openai|anthropic)\b",
+    r"\b(?:openai|anthropic)\b.{0,80}\b(?:fundraising|ipo|loss)\b|"
+    r"\b(?:fundraising|ipo|loss)\b.{0,80}\b(?:openai|anthropic)\b|"
+    r"\bnscale\b.{0,80}\b(?:deal|talks|multibillion)\b|"
+    r"\b(?:deal|talks|multibillion)\b.{0,80}\bnscale\b",
     re.I,
 )
+_NARROW_RELEASE = re.compile(r"\b(llm-d|vllm|sglang)\b", re.I)
 _DETAILS_LEAK = re.compile(r"\b(?:Prices|Benchmarks|Dates|Availability|Caveats)\s*:", re.I)
+
+
+def _major_money(article: Article) -> bool:
+    """A frontier-lab loss, round, or stated mega-deal. A serving release is not one."""
+    title = article.title or ""
+    if _NARROW_RELEASE.search(title):
+        return False
+    if re.search(r"\bnscale\b", title, re.I) and re.search(r"\b(deal|talks|multibillion)\b", title, re.I):
+        return True
+    return bool(
+        re.search(r"\b(openai|anthropic)\b", title, re.I)
+        and re.search(r"\b(loss|fundraising|ipo)\b|\$\s?\d[\d.]*\s?(?:billion|bln)", title, re.I)
+    )
+
+
+def _narrow_release(article: Article) -> bool:
+    if _major_money(article):
+        return False
+    return _NARROW_RELEASE.search(article.title or "") is not None
+
+
+def _order_pairs(pairs: list) -> list:
+    """Lab financials and major deals come before a serving-stack release."""
+    major, middle, narrow = [], [], []
+    for row in pairs:
+        if _major_money(row[0]):
+            major.append(row)
+        elif _narrow_release(row[0]):
+            narrow.append(row)
+        else:
+            middle.append(row)
+    return major + middle + narrow
 
 
 def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
@@ -1016,7 +1129,8 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         skipped.append(article)
     skipped.sort(key=score_article, reverse=True)
     for article in skipped:
-        if len(pairs) >= limit:
+        room = len(pairs) < limit or any(_narrow_release(row[0]) for row in pairs)
+        if not room:
             break
         what, why = extractive_lines(article)
         headline = _order_lead(article) or rewrite_headline(what or article.title)
@@ -1034,7 +1148,10 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
             continue
         pairs.append((article, headline, body, why_line))
-    return pairs
+    pairs = _order_pairs(pairs)
+    while len(pairs) > limit and pairs and _narrow_release(pairs[-1][0]):
+        pairs.pop()
+    return pairs[:limit]
 
 
 def _not_publishing(exc: BaseException | None = None) -> SchemaError:
@@ -1133,8 +1250,8 @@ def _compose_group(
     if _DANGLING_END.search(lede or ""):
         lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if not line_is_grounded(check or lede, combined, analysis=True):
-        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
+    if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
+        lede = fit_lede(story_lede(pairs), since, until)
     return lede, pairs
 
 

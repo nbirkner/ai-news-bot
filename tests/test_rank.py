@@ -47,6 +47,14 @@ def test_a_hacking_headline_stays_under_the_bar():
     assert score_article(article("AI agents are hacking John Deere equipment")) < 6
 
 
+def test_a_lab_loss_and_a_nscale_deal_outrank_llm_d():
+    loss = article("Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports")
+    nscale = article("Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal")
+    llmd = article("llm-d v1.0 brings distributed inference to Kubernetes", kind="release", source="llm-d")
+    assert score_article(loss) > score_article(llmd)
+    assert score_article(nscale) > score_article(llmd)
+
+
 def test_a_frontier_round_outranks_a_generic_financing():
     lab_round = article("OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say")
     generic = article("Otter.ai raises $320 million in non-equity financing to expand enterprise business")
