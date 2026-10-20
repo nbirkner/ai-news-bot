@@ -4,8 +4,9 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 
+from src.dedupe import canonical_url, jaccard
 from src.discover import prepare_candidates
-from src.fetch import fetch_all
+from src.fetch import AI_TERMS, fetch_all
 from src.guardrails import item_block_reasons, item_drop_reasons, publishing_blocks
 from src.models import BriefingItem, Issue
 from src.state import load_recent, load_seen, recent_items
@@ -68,6 +69,33 @@ def _empty(until: datetime, since: datetime) -> Issue:
         since=since,
         until=until,
     )
+
+
+def _shares_long_words(left: str, right: str) -> bool:
+    from src.clean import tokens
+    shared = {word for word in set(tokens(left)) & set(tokens(right)) if len(word) >= 6}
+    return len(shared) >= 3
+
+
+def _also_titles(items: list, shortlist: list, limit: int = 8) -> tuple:
+    chosen = {canonical_url(item.url) for item in items if item.url}
+    chosen_titles = [item.what_happened or "" for item in items]
+    extras = []
+    for article in shortlist or []:
+        if canonical_url(article.url) in chosen:
+            continue
+        title = (article.title or "").strip()
+        title = title.replace("\u2014", ", ").replace("\u2013", ", ").replace("—", ", ").replace("–", ", ")
+        if not title or not AI_TERMS.search(title):
+            continue
+        if any(jaccard(title, previous) >= 0.45 for previous in chosen_titles + extras):
+            continue
+        if any(_shares_long_words(title, previous) for previous in chosen_titles + extras):
+            continue
+        extras.append(title)
+        if len(extras) >= limit:
+            break
+    return tuple(extras)
 
 
 def _story(row) -> BriefingItem:
@@ -145,6 +173,8 @@ def generate_issue(
             recent=memory,
             limit=limit,
             require_full_body=bool(api_key),
+            since=since,
+            until=until,
         )
     except AuthError as exc:
         return _empty(until, since), ["Together API rejected the key or model name. Not publishing."], discovered
@@ -178,6 +208,7 @@ def generate_issue(
             items=items,
             since=since,
             until=until,
+            also_in_window=_also_titles(items, discovered.shortlist),
         )
     stored = load_recent(recent_path) if recent_path is not None else []
     failures = []

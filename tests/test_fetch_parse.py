@@ -5,6 +5,8 @@ from src.fetch import (
     enrich_previews,
     in_window,
     parse_anthropic_html,
+    parse_blog_index,
+    parse_federal_register,
     parse_meta_html,
     parse_reuters_sitemap,
 )
@@ -154,6 +156,101 @@ def test_in_window():
     assert not in_window(datetime(2026, 10, 1, tzinfo=timezone.utc), since, now)
 
 
+def test_a_wire_that_rolled_off_the_sitemap_is_still_a_candidate():
+    from src.fetch import headlines_not_in
+    have = Article(
+        url="https://www.reuters.com/technology/openai-raise",
+        title="OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+    )
+    loss = Article(
+        url="https://news.google.com/rss/articles/loss",
+        title="Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 20, 19, 41, tzinfo=timezone.utc),
+    )
+    duplicate = Article(
+        url="https://news.google.com/rss/articles/same",
+        title="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+    )
+    kept = headlines_not_in([duplicate, loss], [have], cap=3)
+    assert [article.title for article in kept] == [loss.title]
+
+
+def test_reuters_is_read_before_a_later_pymnts_recap():
+    from src.fetch import rank_wire_headlines
+    fillers = [
+        Article(
+            url=f"https://www.cnbc.com/deepseek-{index}",
+            title=f"US bans DeepSeek from agency systems note {index}",
+            source_name="CNBC",
+            source_domain="cnbc.com",
+            published_at=datetime(2026, 10, 20, 12, index, tzinfo=timezone.utc),
+            source_kind="news",
+            source_priority=2,
+        )
+        for index in range(11)
+    ]
+    reuters = Article(
+        url="https://www.reuters.com/technology/openai-raise",
+        title="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 19, 23, 18, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=2,
+    )
+    pymnts = Article(
+        url="https://www.pymnts.com/openai-raise",
+        title="OpenAI Racing to Raise $30 Billion Ahead of Anthropic Listing",
+        source_name="PYMNTS",
+        source_domain="pymnts.com",
+        published_at=datetime(2026, 10, 20, 10, 39, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=3,
+    )
+    braze = Article(
+        url="https://www.reuters.com/technology/salesforce-braze",
+        title="Salesforce deepens AI bets with $5.66 billion Braze deal",
+        source_name="Reuters",
+        source_domain="reuters.com",
+        published_at=datetime(2026, 10, 20, 18, 16, tzinfo=timezone.utc),
+        source_kind="news",
+        source_priority=2,
+    )
+    kept = rank_wire_headlines(fillers + [braze, pymnts, reuters], cap=1)
+    assert [article.url for article in kept] == [reuters.url]
+
+
+def test_monday_morning_pt_is_outside_and_tuesday_morning_is_inside():
+    """Mon Oct 19 8:00 AM PT through Tue Oct 20 11:00 AM PT.
+
+    Early Monday is before the open. The same clock time on Tuesday is inside.
+    """
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    until = datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
+    monday_306am = datetime(2026, 10, 19, 10, 6, tzinfo=timezone.utc)
+    monday_5am = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
+    monday_6am = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)
+    tuesday_306am = datetime(2026, 10, 20, 10, 6, tzinfo=timezone.utc)
+    tuesday_5am = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    tuesday_6am = datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)
+    assert not in_window(monday_306am, since, until)
+    assert not in_window(monday_5am, since, until)
+    assert not in_window(monday_6am, since, until)
+    assert in_window(tuesday_306am, since, until)
+    assert in_window(tuesday_5am, since, until)
+    assert in_window(tuesday_6am, since, until)
+    assert in_window(since, since, until)
+    assert in_window(until, since, until)
+
+
 def test_enrich_fills_a_thin_preview():
     item = Article(
         url="https://www.anthropic.com/news/example",
@@ -171,3 +268,55 @@ def test_enrich_fills_a_thin_preview():
     )
     enrich_previews([item], getter=lambda url: html)
     assert "preparing its models" in item.content_preview
+
+
+def test_federal_register_keeps_an_ai_order_and_drops_a_lab_accreditation():
+    source = {
+        "name": "Federal Register",
+        "domain": "federalregister.gov",
+        "kind": "news",
+        "priority": 1,
+    }
+    payload = {"results": [
+        {
+            "title": "Notice of Order Regarding Exclusion and Removal of DeepSeek Products",
+            "abstract": "The Department of Homeland Security is publishing notice of an order removing DeepSeek products from federal civilian agency systems.",
+            "html_url": "https://www.federalregister.gov/documents/2026/10/20/example",
+            "publication_date": "2026-10-20",
+        },
+        {
+            "title": "Accreditation of SGS North America as a Commercial Laboratory",
+            "abstract": "Notice of accreditation for a gauging laboratory.",
+            "html_url": "https://www.federalregister.gov/documents/2026/10/20/other",
+            "publication_date": "2026-10-20",
+        },
+    ]}
+    articles = parse_federal_register(source, payload)
+    assert len(articles) == 1
+    assert "DeepSeek" in articles[0].title
+    assert articles[0].published_at == datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+    assert "federal civilian" in articles[0].full_text
+
+
+def test_blog_index_reads_the_post_date_and_treats_midnight_as_morning():
+    source = {
+        "name": "MiniMax",
+        "url": "https://www.minimax.io/blog",
+        "domain": "minimax.io",
+        "kind": "lab",
+        "priority": 1,
+        "max_results": 2,
+    }
+    index = '<a href="/blog/minimax-m31f">MiniMax M3.1 Flash</a><a href="/blog">Blog</a>'
+    page = """
+    <html><head>
+      <meta property="og:title" content="MiniMax M3.1 Flash: agent model | MiniMax">
+      <meta property="og:description" content="MiniMax M3.1 Flash is a 428B model with 23B active parameters.">
+      <script type="application/ld+json">{"datePublished":"2026-10-19T00:00:00.000Z"}</script>
+    </head></html>
+    """
+    articles = parse_blog_index(source, index, getter=lambda url: page)
+    assert len(articles) == 1
+    assert articles[0].title.startswith("MiniMax M3.1 Flash")
+    assert articles[0].published_at == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert "428B" in articles[0].content_preview

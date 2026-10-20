@@ -42,6 +42,31 @@ _PRIVATE_WORDS = re.compile(
 )
 
 
+def is_homepage_url(url: str) -> bool:
+    """A site root or a quote page is not an article.
+
+    MarketScreener story URLs contain ``/news/``. A ticker such as
+    ``/quote/stock/...`` is the homepage for that symbol.
+    """
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    if path in {"", "/"}:
+        return True
+    lowered = path.lower()
+    if "marketscreener.com" in host and "/news" not in lowered:
+        return True
+    if "/quote/" in lowered or lowered.startswith("/quote"):
+        return True
+    return False
+
+
 def is_public_http_url(url: str) -> bool:
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in {"http", "https"}:
@@ -61,7 +86,7 @@ def is_public_http_url(url: str) -> bool:
 def is_generic_oneliner(headline: str, body: str) -> bool:
     """The failure mode is 'vLLM v0.32.0. It adds new features.'"""
     sentences = [sentence for sentence in split_sentences(body or "") if len(sentence) > 20]
-    if len(sentences) < 3:
+    if len(sentences) < 2:
         return True
     if _GENERIC.search(f"{headline or ''} {body or ''}") and not re.search(r"\d", body or ""):
         return True
@@ -100,6 +125,8 @@ def item_drop_reasons(item) -> list:
     reasons = []
     if not is_public_http_url(item.url):
         reasons.append("missing public source url")
+    elif is_homepage_url(item.url):
+        reasons.append("homepage url")
     if is_generic_oneliner(item.what_happened, item.body):
         reasons.append("generic one-liner")
     return reasons

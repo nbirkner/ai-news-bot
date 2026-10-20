@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from src.clean import collapse_ws
+from src.clean import collapse_ws, scrub_copy
+from src.clean import _CHROME_PHRASE as _CHROME
 from src.exa_search import fetch_contents
 from src.fetch import DATE_RE, http_get
 
@@ -47,6 +48,38 @@ _PAYWALL = (
     "nytimes.com",
     "politico.com",
 )
+# Lab and company posts often 403 a bot. A reader proxy is the fallback.
+_READER_HOSTS = (
+    "openai.com",
+    "minimax.io",
+    "engineering.fb.com",
+    "microsoft.com",
+    "axios.com",
+    "investing.com",
+    "reuters.com",
+)
+# Pages that regularly refuse a bot. A wire syndication is the next read.
+_BLOCKED_HOSTS = (
+    "reuters.com",
+    "investing.com",
+    "openai.com",
+    "axios.com",
+)
+_SYNDICATION_HOSTS = (
+    "finance.yahoo.com",
+    "news.yahoo.com",
+    "yahoo.com",
+    "pymnts.com",
+    "marketscreener.com",
+)
+
+
+def _without_chrome(text: str) -> str:
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", collapse_ws(text or "")):
+        if sentence and not _CHROME.search(sentence):
+            kept.append(sentence)
+    return " ".join(kept)
 
 
 def extract_html_text(raw: str) -> str:
@@ -55,7 +88,14 @@ def extract_html_text(raw: str) -> str:
     for tag in soup(["script", "style", "nav", "footer", "noscript", "svg", "header", "form", "aside"]):
         tag.decompose()
     preferred = None
-    for class_name in ("markdown-body", "article-body", "post-content", "entry-content", "article__content"):
+    for class_name in (
+        "markdown-body",
+        "article-body",
+        "ArticleBody",
+        "post-content",
+        "entry-content",
+        "article__content",
+    ):
         preferred = soup.find(class_=re.compile(class_name))
         if preferred is not None:
             break
@@ -65,11 +105,11 @@ def extract_html_text(raw: str) -> str:
     paragraphs = []
     for tag in node.find_all(["p", "li", "h1", "h2", "h3", "pre"]):
         text = collapse_ws(tag.get_text(" ", strip=True))
-        if len(text) >= 40:
+        if len(text) >= 40 and not _CHROME.search(text):
             paragraphs.append(text)
     if paragraphs and sum(len(part) for part in paragraphs) >= 80:
-        return "\n".join(paragraphs)
-    return collapse_ws(node.get_text(" ", strip=True))
+        return scrub_copy("\n".join(paragraphs))
+    return scrub_copy(_without_chrome(node.get_text(" ", strip=True)))
 
 
 def extract_details(text: str) -> dict:
@@ -128,12 +168,235 @@ def _huggingface_readme(url: str) -> str:
     return f"https://huggingface.co/{parts[0]}/{parts[1]}/raw/main/README.md"
 
 
+def _host(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _blocked_host(url: str) -> bool:
+    host = _host(url)
+    return any(host == bit or host.endswith("." + bit) for bit in _BLOCKED_HOSTS)
+
+
+def _access_denied(exc: BaseException) -> bool:
+    """A bot block. 401 and 403 take the same fallback path."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status in (401, 403):
+        return True
+    text = str(exc)
+    return "401" in text or "403" in text
+
+
+def _syndication_label(url: str) -> str:
+    host = _host(url)
+    if "yahoo" in host:
+        return "Yahoo Finance"
+    if "pymnts" in host:
+        return "PYMNTS"
+    if "marketscreener" in host:
+        return "MarketScreener"
+    return host.split(".")[0] or "Web"
+
+
+def _syndication_host(url: str) -> bool:
+    host = _host(url)
+    return any(host == bit or host.endswith("." + bit) for bit in _SYNDICATION_HOSTS)
+
+
+def syndication_queries(title: str) -> list:
+    """Quoted searches for a wire. The EXCLUSIVE label is not on the reprint."""
+    text = re.sub(
+        r"^(exclusive|breaking|update|analysis)\s*:\s*",
+        "",
+        " ".join((title or "").split()),
+        flags=re.I,
+    )
+    text = re.sub(r",\s*sources say\s*$", "", text, flags=re.I).strip()
+    titles = []
+    if len(text) >= 12:
+        titles.append(text)
+    words = text.split()
+    if len(words) > 8:
+        short = " ".join(words[:8])
+        if short not in titles and len(short) >= 12:
+            titles.append(short)
+    sites = (
+        "(site:finance.yahoo.com OR site:news.yahoo.com "
+        "OR site:pymnts.com OR site:marketscreener.com)"
+    )
+    return [f"\"{item}\" {sites}" for item in titles]
+
+
+def syndication_preference(url: str) -> int:
+    """Lower wins. MarketScreener, then Yahoo, then PYMNTS."""
+    host = _host(url)
+    if "marketscreener" in host:
+        return 0
+    if "yahoo" in host:
+        return 1
+    if "pymnts" in host:
+        return 2
+    return 9
+
+
+def choose_syndication(copies: list) -> tuple:
+    """Pick a readable syndication copy. Skip a homepage or ticker URL."""
+    from src.guardrails import is_homepage_url
+    viable = []
+    for text, url in copies:
+        if len(text or "") < 400 or not url or is_homepage_url(url):
+            continue
+        viable.append((text, url))
+    if not viable:
+        return "", ""
+    viable.sort(key=lambda row: (syndication_preference(row[1]), -len(row[0])))
+    text, url = viable[0]
+    return text[:12000], url
+
+
+def syndication_text(title: str, original_url: str = "") -> tuple:
+    """Readable wire copy when the primary page returns 401 or 403. (text, url)."""
+    from src.fetch import decode_google_news_url
+    from src.guardrails import is_homepage_url
+    queries = syndication_queries(title)
+    if not queries:
+        return "", ""
+    import feedparser
+    origin = _host(original_url)
+    copies = []
+    fetches = 0
+    for query in queries:
+        try:
+            raw = http_get(
+                "https://news.google.com/rss/search",
+                params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            ).content
+        except Exception as exc:
+            print(f"Warning: syndication search failed: {exc}", file=sys.stderr)
+            continue
+        feed = feedparser.parse(raw)
+        for entry in feed.entries[:8]:
+            link = entry.get("link") or ""
+            if "news.google.com" not in link:
+                continue
+            try:
+                url = decode_google_news_url(link)
+            except Exception as exc:
+                print(f"Warning: syndication decode failed: {exc}", file=sys.stderr)
+                continue
+            if not url or not _syndication_host(url) or _host(url) == origin:
+                continue
+            if is_homepage_url(url):
+                continue
+            if fetches >= 6:
+                break
+            fetches += 1
+            try:
+                page = http_get(url).text
+            except Exception as exc:
+                print(f"Warning: syndication fetch failed for {url}: {exc}", file=sys.stderr)
+                continue
+            text = extract_html_text(page)
+            if len(text) >= 400:
+                copies.append((text, url))
+                if syndication_preference(url) == 0:
+                    return choose_syndication(copies)
+        if fetches >= 6:
+            break
+    return choose_syndication(copies)
+
+
+def _cache_text(url: str) -> str:
+    """Google's cache of a page that returned 403. A shell page is not an article."""
+    try:
+        raw = http_get(
+            "https://webcache.googleusercontent.com/search",
+            params={"q": "cache:" + url},
+        ).text
+    except Exception as exc:
+        print(f"Warning: cache fallback failed for {url}: {exc}", file=sys.stderr)
+        return ""
+    text = extract_html_text(raw)
+    head = text[:600].lower()
+    if "before you continue" in head or "enable javascript" in head:
+        return ""
+    if len(text) < 400:
+        return ""
+    return text[:12000]
+
+
+def _reader_text(url: str) -> str:
+    """Fallback when a lab page returns 403 to a plain GET."""
+    try:
+        raw = http_get("https://r.jina.ai/" + url).text
+    except Exception as exc:
+        print(f"Warning: reader fallback failed for {url}: {exc}", file=sys.stderr)
+        return ""
+    if "Markdown Content:" in raw:
+        raw = raw.split("Markdown Content:", 1)[1]
+    if "captcha" in raw[:400].lower():
+        return ""
+    return collapse_ws(raw)
+
+
+def _apply_fallback(article) -> None:
+    """Syndication, then the Google cache, then the RSS description.
+
+    A Reuters page that 401s keeps the Reuters label when a Yahoo copy is
+    readable, so it still beats a PYMNTS recap of the same wire.
+    """
+    origin = _host(article.url)
+    extra, via = syndication_text(article.title, article.url)
+    if len(extra) > len(article.full_text or ""):
+        article.full_text = extra
+        if via and "reuters.com" not in origin:
+            article.url = via
+            article.source_domain = _host(via)
+            article.source_name = _syndication_label(via)
+        elif via:
+            article.url = via
+        return
+    cached = _cache_text(article.url)
+    if len(cached) > len(article.full_text or ""):
+        article.full_text = cached
+        return
+    preview = article.content_preview or ""
+    if len(preview) > len(article.full_text or ""):
+        article.full_text = preview
+
+
+def fill_denied_stubs(articles) -> None:
+    """Read a syndication copy before dedupe, so a 401 stub cannot win."""
+    for article in articles:
+        if len(article.full_text or "") >= 400:
+            continue
+        if not (_blocked_host(article.url) or (_paywalled(article.url) and _blocked_host(article.url))):
+            continue
+        _apply_fallback(article)
+
+
+def _syndication_first(url: str) -> bool:
+    """Reuters and Investing.com refuse a bot. Read a syndication copy instead."""
+    host = _host(url)
+    if "investing.com" in host:
+        return True
+    return _blocked_host(url) and _paywalled(url)
+
+
 def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None, getter=None, contents=None) -> None:
     """Fill full_text and details in place. Failures stay on the preview."""
+    live_fetch = getter is None
     getter = getter or (lambda url: http_get(url).text)
     contents = contents or fetch_contents
     for article in articles:
         if len(article.full_text or "") >= 400:
+            continue
+        # Reuters and Investing.com 401 or 403 a direct GET. Do not request them.
+        if live_fetch and _syndication_first(article.url):
+            _apply_fallback(article)
             continue
         if _paywalled(article.url):
             continue
@@ -145,12 +408,28 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
             raw = getter(target)
         except Exception as exc:
             print(f"Warning: full text fetch failed for {article.url}: {exc}", file=sys.stderr)
+            if live_fetch and _blocked_host(article.url) and _access_denied(exc):
+                _apply_fallback(article)
             continue
         if not raw:
             continue
-        text = extract_html_text(raw) if "<" in raw[:500].lower() else collapse_ws(raw)
+        text = extract_html_text(raw) if "<" in raw[:500].lower() else scrub_copy(raw)
         if len(text) > len(article.full_text or ""):
             article.full_text = text[:12000]
+    for article in articles:
+        if len(article.full_text or "") >= 400:
+            continue
+        host = urlparse(article.url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if _blocked_host(article.url):
+            # Jina answers 401 here. The syndication chain already ran.
+            continue
+        if not any(host == bit or host.endswith("." + bit) for bit in _READER_HOSTS):
+            continue
+        extra = _reader_text(article.url)
+        if len(extra) > len(article.full_text or ""):
+            article.full_text = extra[:12000]
     thin = [article for article in articles if len(article.full_text or "") < 400]
     if thin and exa_api_key and budget is not None:
         mapping = contents(exa_api_key, [article.url for article in thin], budget)

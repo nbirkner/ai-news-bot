@@ -27,6 +27,26 @@ def _yaml_quote(value: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def window_line(issue) -> str:
+    """Mon Oct 19, 8:00 AM PT – Tue Oct 20, 11:00 AM PT, when the issue has both ends."""
+    if not issue.since or not issue.until:
+        return ""
+    return f"Window: {_pt_stamp(issue.since)} to {_pt_stamp(issue.until)}"
+
+
+def _pt_stamp(moment: datetime) -> str:
+    local = moment.astimezone(PACIFIC)
+    hour = str(int(local.strftime("%I")))
+    return f"{local.strftime('%a %b')} {local.day}, {hour}:{local.strftime('%M %p')} PT"
+
+
+def _also_line(issue) -> str:
+    titles = [title.strip() for title in (getattr(issue, "also_in_window", ()) or ()) if title and title.strip()]
+    if not titles:
+        return ""
+    return "Also in the window: " + "; ".join(titles) + "."
+
+
 def render_mdx(issue) -> str:
     tags = ", ".join(issue.tags or ["ai"])
     lines = [
@@ -38,11 +58,14 @@ def render_mdx(issue) -> str:
         "---",
         "",
     ]
+    stamp = window_line(issue)
+    if stamp:
+        lines.extend([stamp, ""])
     if issue.summary:
         lines.extend([issue.summary, ""])
     for item in issue.items:
         lines.extend([
-            f"## {item.what_happened}",
+            f"**{item.what_happened}**",
             "",
             item.body,
             "",
@@ -51,6 +74,9 @@ def render_mdx(issue) -> str:
             f"[{item.source_name}]({item.url})",
             "",
         ])
+    also = _also_line(issue)
+    if also:
+        lines.extend([also, ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -64,6 +90,9 @@ def render_email(issue) -> str:
         f"<h1>{html.escape(issue.title)}</h1>",
         f'<p><a href="{html.escape(web_url(issue))}">Read this on the web</a></p>',
     ]
+    stamp = window_line(issue)
+    if stamp:
+        chunks.append(f"<p>{html.escape(stamp)}</p>")
     if issue.summary:
         chunks.append(f"<p>{html.escape(issue.summary)}</p>")
     for item in issue.items:
@@ -74,6 +103,9 @@ def render_email(issue) -> str:
         chunks.append(
             f'<p><a href="{html.escape(item.url)}">{html.escape(item.source_name)}</a></p>'
         )
+    also = _also_line(issue)
+    if also:
+        chunks.append(f"<p>{html.escape(also)}</p>")
     chunks.extend([
         f'<p><a href="{html.escape(web_url(issue))}">Web version</a></p>',
         f'<p><a href="{UNSUBSCRIBE}">Unsubscribe</a></p>',

@@ -237,6 +237,22 @@ def test_a_sparse_source_keeps_its_only_story():
     assert any("safety bill" in article.title for article in short)
 
 
+def test_page_chrome_datelines_and_entities_are_stripped():
+    from src.read import extract_html_text
+    raw = (
+        "<html><body>"
+        "Skip Navigation Markets Stocks &amp;amp; Bonds. "
+        "Published Mon, Oct 20 2026 9:00 AM EDT. "
+        "Anthropic &amp; Nscale are in talks over a second multibillion dollar cloud deal this week."
+        "</body></html>"
+    )
+    text = extract_html_text(raw)
+    assert "Skip Navigation" not in text
+    assert "Published" not in text
+    assert "&amp;" not in text
+    assert "Anthropic & Nscale" in text
+
+
 def test_extract_html_ignores_nav_chrome_and_keeps_the_body():
     from src.read import extract_html_text
     raw = """
@@ -328,20 +344,29 @@ def test_compose_ranks_from_full_text_and_checks_facts(monkeypatch):
     def fake_call(prompt, api_key, model):
         captured["prompt"] = prompt
         captured["model"] = model
+        start = prompt.find("Candidates:\n")
+        blob = prompt[start + len("Candidates:\n"):]
+        end = blob.find("\n\nReturn:")
+        rows = json.loads(blob[:end]) if start >= 0 and end > 0 else []
+        by_title = {row["title"]: row["index"] for row in rows}
+        items = []
+        deep = next((title for title in by_title if title.startswith("DeepSeek")), "")
+        ten = next((title for title in by_title if title.startswith("Tenstorrent")), "")
+        if deep:
+            items.append({
+                "index": by_title[deep],
+                "headline": "DeepSeek released DeepSeek-V4.1-Flash-1017 as open weights.",
+                "why_it_matters": "Serving stacks have a new open checkpoint to evaluate.",
+            })
+        if ten:
+            items.append({
+                "index": by_title[ten],
+                "headline": "Tenstorrent raised $9 billion.",
+                "why_it_matters": "A larger round would change who can build training chips.",
+            })
         return json.dumps({
             "lede": "Open models, agent incidents, and a chip round landed in the same window.",
-            "items": [
-                {
-                    "index": 3,
-                    "what_happened": "DeepSeek released DeepSeek-V4.1-Flash-1017 as open weights.",
-                    "why_it_matters": "Serving stacks have a new open checkpoint to evaluate.",
-                },
-                {
-                    "index": 5,
-                    "what_happened": "Tenstorrent raised $9 billion.",
-                    "why_it_matters": "A larger round would change who can build training chips.",
-                },
-            ],
+            "items": items,
         })
 
     monkeypatch.setattr("src.summarize._call_together", fake_call)
@@ -385,7 +410,7 @@ def test_llm_rank_path_posts_a_low_score_story_on_dry_run(tmp_path):
         "sources": [{"name": "Politico"}, {"name": "DeepSeek"}, {"name": "vLLM"}],
     }
 
-    def composer(candidates, api_key, model, *, strict_auth, recent, limit):
+    def composer(candidates, api_key, model, *, strict_auth, recent, limit, **kwargs):
         chosen = [article for article in candidates if "safety bill" in article.title or article.title.startswith("DeepSeek")]
         assert any(len(article.full_text) > 80 for article in candidates)
         return (
@@ -501,11 +526,14 @@ def test_config_and_workflow_name_the_new_sources():
     import yaml
     config = yaml.safe_load(Path("config.yaml").read_text())
     names = {source["name"] for source in config["sources"]}
-    for name in ("Politico", "CNBC", "TechCrunch", "Fortune", "DeepSeek", "Qwen", "Moonshot", "Hugging Face trending"):
+    for name in (
+        "Politico", "CNBC", "TechCrunch", "Fortune", "DeepSeek", "Qwen", "Moonshot",
+        "Hugging Face trending", "Investing.com", "Federal Register", "Meta Engineering", "MiniMax",
+    ):
         assert name in names
     assert config["together_model"] == "zai-org/GLM-5.3"
     assert config["llm_rank"] is True
-    assert config["read_candidates"] == 15
+    assert config["read_candidates"] == 20
     assert config["exa_max_calls"] == 30
     workflow = Path(".github/workflows/briefing.yml").read_text()
     assert "EXA_API_KEY" in workflow

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.models import Article, BriefingItem, FetchReport, Issue
-from src.newsletter import render_email, render_mdx, render_slack, slack_contains_story
+from src.newsletter import _pt_stamp, render_email, render_mdx, render_slack, slack_contains_story
 from src.summarize import SchemaError, _rank_prompt, compose_briefing
 
 
@@ -77,7 +77,11 @@ def test_rank_prompt_has_no_together_angle():
     assert "for together" not in prompt
     assert "together ai" not in prompt
     assert "headline" in prompt
-    assert "3 to 5" in prompt
+    assert "2 to 3" in prompt
+    assert "bring it up this week" in prompt
+    assert "revenue" in prompt
+    assert "worth a look" in prompt
+    assert "most of the loss is non-cash" not in prompt
 
 
 def test_schema_failure_raises_when_a_full_body_is_required(monkeypatch):
@@ -96,6 +100,39 @@ def test_schema_failure_raises_when_a_full_body_is_required(monkeypatch):
         assert False, "expected SchemaError"
     except SchemaError as exc:
         assert "schema validation" in str(exc)
+
+
+def test_window_start_overrides_the_previous_slot(monkeypatch):
+    seen = {}
+
+    def fake_generate(config, **kwargs):
+        seen["since"] = kwargs["since"]
+        seen["until"] = kwargs["until"]
+        return _issue(), [], type("Discovered", (), {"exa_search_calls": 0, "exa_content_pages": 0})()
+
+    monkeypatch.setattr("main_newsletter.generate_issue", fake_generate)
+    monkeypatch.setenv("OUT_DIR", "/tmp/window-start-test")
+    from main_newsletter import main
+    code = main([
+        "main_newsletter.py",
+        "--dry-run",
+        "--window-start",
+        "2026-10-19T15:00:00Z",
+        "--window-end",
+        "2026-10-20T18:00:00Z",
+    ])
+    assert code == 0
+    assert seen["since"] == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert seen["until"] == datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
+
+
+def test_pacific_stamp_keeps_monday_morning_on_monday():
+    assert _pt_stamp(datetime(2026, 10, 19, 10, 6, tzinfo=timezone.utc)) == "Mon Oct 19, 3:06 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 5:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 6:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 20, 13, 0, tzinfo=timezone.utc)) == "Tue Oct 20, 6:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 19, 15, 0, tzinfo=timezone.utc)) == "Mon Oct 19, 8:00 AM PT"
+    assert _pt_stamp(datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc)) == "Tue Oct 20, 11:00 AM PT"
 
 
 def test_window_end_dates_match_the_mwf_cadence():
@@ -208,6 +245,50 @@ def test_cli_writes_out_and_never_sends(tmp_path, monkeypatch):
     assert "exa_search_calls: 2" in usage
     assert "sends: none" in usage
     assert not (tmp_path / "2026-10-19.blocked.txt").exists()
+
+
+def test_generate_issue_publishes_nothing_when_ranking_times_out(monkeypatch):
+    import requests
+
+    def boom(*args, **kwargs):
+        raise requests.Timeout("read timeout=120")
+
+    monkeypatch.setattr("src.summarize._call_together", boom)
+    issue, failures, _discovered = generate_issue(
+        {"max_items": 7, "together_model": "zai-org/GLM-5.3", "sources": [{}, {}, {}], "read_full_text": False},
+        since=SINCE,
+        until=NOW,
+        api_key="sk-test",
+        fetcher=lambda config, since, now: FetchReport(articles=[_article()], failures=[], successes=3),
+        reader=lambda *args, **kwargs: None,
+    )
+    assert issue.items == []
+    assert any("Not publishing" in reason for reason in failures)
+    assert all("Skip Navigation" not in reason for reason in failures)
+    assert all("71.5%" not in reason for reason in failures)
+
+
+def test_a_ranking_failure_writes_a_quiet_note_and_exits(tmp_path, monkeypatch):
+    issue = _issue()
+    issue.items = []
+
+    class Discovered:
+        exa_search_calls = 0
+        exa_content_pages = 0
+
+    def fake_generate(config, **kwargs):
+        return issue, ["Ranking failed (read timeout=120). Not publishing."], Discovered()
+
+    monkeypatch.setattr("main_newsletter.generate_issue", fake_generate)
+    monkeypatch.setenv("TOGETHER_API_KEY", "sk-personal-test")
+    monkeypatch.setenv("OUT_DIR", str(tmp_path))
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--dry-run", "--window-end", "2026-10-19"])
+    assert code == 2
+    note = (tmp_path / "2026-10-19.blocked.txt").read_text()
+    assert "Not publishing" in note
+    assert not (tmp_path / "2026-10-19.mdx").exists()
+    assert not (tmp_path / "2026-10-19.html").exists()
 
 
 def test_cli_refuses_send_flag(monkeypatch):

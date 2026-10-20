@@ -6,7 +6,15 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.dedupe import canonical_url, dedupe_articles, jaccard
+from src.dedupe import (
+    canonical_url,
+    dedupe_articles,
+    event_already_happened,
+    round_already_announced,
+    same_underlying_event,
+)
+from src.guardrails import is_homepage_url
+from src.rank import is_low_trust
 from src.exa_search import ExaBudget, resolve_cap, search_queries
 from src.fetch import fetch_all
 from src.rank import shortlist_for_reading
@@ -35,7 +43,7 @@ def _already_posted(article, items: list) -> bool:
     for item in items:
         if canonical_url(article.url) == canonical_url(item.get("url") or ""):
             return True
-        if jaccard(article.title, item.get("title") or "") >= 0.55:
+        if same_underlying_event(article, item.get("title") or ""):
             return True
     return False
 
@@ -81,14 +89,26 @@ def prepare_candidates(
         pass
 
     combined = list(report.articles) + list(exa_articles)
+    prior = list(getattr(report, "prior", None) or [])
     fresh = []
     for article in combined:
         if canonical_url(article.url) in seen:
             continue
+        if is_homepage_url(article.url):
+            print(f"Skip, homepage url: {article.title}", file=sys.stderr)
+            continue
+        if event_already_happened(article, since) or round_already_announced(article, prior, since):
+            print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
+            continue
         if _already_posted(article, recent_items):
             print(f"Skip, already briefed: {article.title}", file=sys.stderr)
             continue
+        if is_low_trust(article):
+            article.source_priority = max(article.source_priority, 5)
         fresh.append(article)
+    if config.get("read_full_text"):
+        from src.read import fill_denied_stubs
+        fill_denied_stubs(fresh)
     result.fresh = fresh
     result.pool = dedupe_articles(fresh)
     limit = int(config.get("read_candidates", 15))
@@ -101,6 +121,16 @@ def prepare_candidates(
             exa_api_key=exa_api_key,
             budget=budget if exa_api_key else None,
         )
+        kept = []
+        for article in result.shortlist:
+            if event_already_happened(article, since):
+                print(f"Skip, event is older than the window: {article.title}", file=sys.stderr)
+                continue
+            if is_homepage_url(article.url):
+                print(f"Skip, homepage url: {article.title}", file=sys.stderr)
+                continue
+            kept.append(article)
+        result.shortlist = kept
 
     result.exa_calls = budget.used
     result.exa_search_calls = budget.search_calls
@@ -114,4 +144,6 @@ def prepare_candidates(
         f"Pool {len(result.pool)} after dedupe, shortlist {len(result.shortlist)} for reading",
         file=sys.stderr,
     )
+    for index, article in enumerate(result.shortlist, start=1):
+        print(f"  {index}. {article.source_name}: {article.title}", file=sys.stderr)
     return result

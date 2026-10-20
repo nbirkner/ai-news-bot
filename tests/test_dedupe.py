@@ -70,6 +70,201 @@ def test_unrelated_items_that_share_a_lab_name_stay_separate():
     assert not same_event(launch, lawsuit)
 
 
+def test_a_rewritten_wire_is_the_same_funding_story():
+    wire = article(
+        "https://www.reuters.com/world/openai-raise",
+        "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        priority=2,
+    )
+    recap = article(
+        "https://www.pymnts.com/openai-raise",
+        "OpenAI races to raise $30 billion ahead of Anthropic IPO",
+        priority=2,
+        preview="OpenAI is racing to raise $30 billion at a valuation above $1.4 trillion, Reuters reported.",
+    )
+    assert same_story(wire, recap)
+    kept = dedupe_articles([wire, recap])
+    assert len(kept) == 1
+    assert kept[0].url == recap.url
+
+
+def test_two_outlets_covering_one_acquisition_are_the_same_story():
+    lab = article(
+        "https://openai.com/index/openai-to-acquire-orchestra-bio",
+        "OpenAI acquires Orchestra Bio",
+        priority=1,
+        kind="lab",
+    )
+    wire = article(
+        "https://www.axios.com/2026/10/20/exclusive-openai-biotech-startup-drug-development",
+        "Exclusive: OpenAI has acquired Orchestra Bio",
+        priority=3,
+    )
+    assert same_story(lab, wire)
+    other = article(
+        "https://openai.com/other",
+        "OpenAI acquires a chip design team",
+        priority=1,
+        kind="lab",
+    )
+    assert not same_story(lab, other)
+
+
+def test_a_later_writeup_uses_the_event_date_not_the_byline():
+    from src.dedupe import event_already_happened, event_date, same_underlying_event
+    recap = article(
+        "https://examplellp.com/client-alert",
+        "Client alert: eight states sue OpenAI",
+        preview="On October 14, 2026, eight states sued OpenAI over child safety.",
+    )
+    recap.published_at = datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert event_date(recap).isoformat() == "2026-10-14"
+    assert event_already_happened(recap, since)
+    assert same_underlying_event(
+        recap,
+        "Eight US states sue OpenAI, claiming ChatGPT harms children",
+    )
+    fresh = article(
+        "https://www.reuters.com/world/openai-raise",
+        "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+        preview="OpenAI is racing to raise $30 billion, Reuters reported on October 19, 2026.",
+    )
+    fresh.published_at = datetime(2026, 10, 19, 23, tzinfo=timezone.utc)
+    assert not event_already_happened(fresh, since)
+
+
+def test_a_model_launch_is_not_the_same_story_as_a_funding_round():
+    launch = article("https://openai.com/gpt", "OpenAI releases a new model for coding", priority=1, kind="lab")
+    money = article("https://www.reuters.com/raise", "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO")
+    assert not same_story(launch, money)
+
+
+def test_a_later_roundup_of_an_earlier_round_is_already_announced():
+    from src.dedupe import round_already_announced
+    announced = article(
+        "https://www.reuters.com/technology/tenstorrent-raise",
+        "AI chip startup Tenstorrent more than doubles its valuation to $6.2 billion",
+        priority=2,
+    )
+    announced.published_at = datetime(2026, 10, 19, 11, 0, tzinfo=timezone.utc)
+    announced.source_name = "Reuters"
+    recap = article(
+        "https://techcrunch.com/2026/10/19/tenstorrent-hits-6-2b-valuation-to-scale-open-weight-ai-chips/",
+        "Tenstorrent hits $6.2B valuation to scale open-weight AI chips",
+        priority=2,
+    )
+    recap.published_at = datetime(2026, 10, 19, 18, 37, tzinfo=timezone.utc)
+    since = datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert round_already_announced(recap, [announced], since)
+    inside = article(
+        "https://www.reuters.com/technology/openai-raise",
+        "OpenAI races to raise $30 billion ahead of an Anthropic IPO",
+        priority=2,
+    )
+    inside.published_at = datetime(2026, 10, 20, 1, tzinfo=timezone.utc)
+    assert not round_already_announced(inside, [announced], since)
+
+
+def test_a_readable_wire_copy_beats_a_403_stub():
+    stub = article(
+        "https://www.reuters.com/technology/openai-raise",
+        "EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+        priority=2,
+        preview="EXCLUSIVE: OpenAI seeks to accelerate fundraising ahead of Anthropic IPO",
+    )
+    readable = article(
+        "https://www.pymnts.com/openai-raise",
+        "OpenAI Racing to Raise $30 Billion Ahead of Anthropic Listing",
+        priority=3,
+        preview="OpenAI is pitching investors on $50 billion of annualized revenue. " * 4,
+    )
+    readable.full_text = readable.content_preview * 3
+    readable.source_domain = "pymnts.com"
+    kept = dedupe_articles([stub, readable])
+    assert len(kept) == 1
+    assert kept[0].url == readable.url
+
+
+def test_the_federal_register_beats_a_wire_recap_of_the_same_order():
+    order = article(
+        "https://www.federalregister.gov/documents/2026/10/20/deepseek",
+        "Notice of Order Regarding Exclusion and Removal of DeepSeek Products From Federal Civilian Systems",
+        priority=1,
+    )
+    order.source_domain = "federalregister.gov"
+    order.source_name = "Federal Register"
+    order.full_text = "The order covers third-party products developed using the model. " * 8
+    wire = article(
+        "https://www.reuters.com/world/china-deepseek-ban",
+        "China says US' DeepSeek ban disregards Xi-Trump consensus",
+        priority=2,
+    )
+    wire.source_name = "Reuters"
+    wire.source_domain = "reuters.com"
+    wire.full_text = "China criticized the DeepSeek ban and the removal. " * 12
+    assert same_story(order, wire)
+    kept = dedupe_articles([wire, order])
+    assert len(kept) == 1
+    assert kept[0].source_domain == "federalregister.gov"
+
+
+def test_nscale_on_cnbc_and_reuters_is_one_deal():
+    from src.dedupe import jaccard
+    cnbc = article(
+        "https://www.cnbc.com/2026/10/20/anthropic-nscale-deal.html",
+        "Anthropic in talks with neocloud Nscale over second multibillion-dollar deal, source tells CNBC",
+        priority=2,
+    )
+    cnbc.source_name = "CNBC"
+    cnbc.source_domain = "cnbc.com"
+    cnbc.full_text = "Anthropic and Nscale are in talks over a second cloud deal. " * 12
+    reuters = article(
+        "https://uk.marketscreener.com/news/nscale-anthropic-45-billion-123/",
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+        priority=2,
+    )
+    reuters.source_name = "Reuters"
+    reuters.source_domain = "uk.marketscreener.com"
+    reuters.full_text = "Nscale and Anthropic are in talks for a deal of about $45 billion. " * 12
+    assert jaccard(cnbc.title, reuters.title) < 0.55
+    assert same_story(cnbc, reuters)
+    other = article(
+        "https://www.cnbc.com/2026/10/20/anthropic-amazon.html",
+        "Anthropic in talks with Amazon over a new cloud deal",
+        priority=2,
+    )
+    assert not same_story(cnbc, other)
+    kept = dedupe_articles([cnbc, reuters])
+    assert len(kept) == 1
+    assert kept[0].source_name == "Reuters"
+
+
+def test_an_investing_stub_loses_to_the_reuters_copy():
+    stub = article(
+        "https://www.investing.com/news/nscale-anthropic",
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+        priority=2,
+        preview="Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal, source says",
+    )
+    stub.source_name = "Investing.com"
+    stub.source_domain = "investing.com"
+    readable = article(
+        "https://www.marketscreener.com/news/nscale-anthropic-45-billion/",
+        "Nscale, Anthropic in talks for a new $45 billion AI cloud deal, source says",
+        priority=2,
+        preview="Nscale and Anthropic are in talks for a cloud deal of about $45 billion. " * 4,
+    )
+    readable.source_name = "Reuters"
+    readable.source_domain = "marketscreener.com"
+    readable.full_text = readable.content_preview * 3
+    assert same_story(stub, readable)
+    kept = dedupe_articles([stub, readable])
+    assert len(kept) == 1
+    assert kept[0].source_name == "Reuters"
+    assert "marketscreener.com" in kept[0].url
+
+
 def test_dedupe_keeps_the_lab_over_the_recap():
     lab = article(
         "https://openai.com/news/model",
