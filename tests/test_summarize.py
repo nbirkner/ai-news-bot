@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -455,13 +456,107 @@ def test_a_generic_lede_is_replaced_with_the_top_stories():
     generic = "This window is mostly about funding and policy."
     assert not lede_names_stories(generic, rows)
     named = story_lede(rows)
-    assert "Anthropic" in named and "Nscale" in named and "DeepSeek" in named
+    assert "Anthropic's reported $80 billion loss" in named
+    assert "the Nscale deal" in named
+    assert "an order removing DeepSeek" in named
     assert "mostly about" not in named.lower()
+    assert not re.search(r"\bare Anthropic logged\b", named)
+    assert not re.search(r"\b(shows|logged|must)\b", named)
+    broken = "The top stories are Anthropic's reported loss shows an $80 billion hole."
+    assert not lede_names_stories(broken, rows)
     assert lede_names_stories(named, rows)
     fitted = fit_lede(named, since, until)
     assert fitted.startswith("Since Monday morning")
     assert "this week" not in fitted.lower()
     assert "\u2013" not in fitted and "\u2014" not in fitted
+
+
+def test_a_loss_why_names_charges_only_when_the_source_does():
+    from src.summarize import _usable_why
+    article = _article(
+        "Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    article.full_text = (
+        "Anthropic logged a net loss of more than $80 billion in the first half. "
+        "That includes $72 billion in accounting charges on convertible notes."
+    )
+    why = _usable_why("Anthropic's reported loss changes what the lab can spend.", article.full_text, article)
+    assert "$72 billion in accounting charges" in why
+    assert "non-cash" not in why.lower()
+    cash = _article(
+        "Anthropic logged net loss of over $80 billion, WSJ reports",
+        "Most of the loss is non-cash charges.",
+        kind="news",
+    )
+    cash.full_text = "Anthropic logged a net loss of over $80 billion. Most of the loss is non-cash charges."
+    cash_why = _usable_why("The loss changes what the lab can spend.", cash.full_text, cash)
+    assert "non-cash charges" in cash_why.lower()
+    assert cash_why.lower().startswith("most of")
+    plain = _article(
+        "Anthropic logged net loss of over $80 billion, WSJ reports",
+        "Anthropic logged a net loss of over $80 billion.",
+        kind="news",
+    )
+    plain.full_text = (
+        "Anthropic logged a net loss of over $80 billion in the first half. "
+        "The figure was in a draft prospectus."
+    )
+    plain_why = _usable_why("", plain.full_text, plain)
+    assert "non-cash" not in (plain_why or "").lower()
+    assert "accounting charges" not in (plain_why or "").lower()
+
+
+def test_nvidia_china_orders_stay_with_anthropic_and_nscale():
+    from src.summarize import _backfill_clear_bar
+    loss = _article(
+        "Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    loss.url = "https://www.reuters.com/anthropic-loss"
+    loss.full_text = (
+        "Anthropic logged a net loss of more than $80 billion in the first half of 2026. "
+        "That includes $72 billion in accounting charges on convertible notes."
+    )
+    nscale = _article(
+        "Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal",
+        "Nscale is in talks with Anthropic.",
+        kind="news",
+    )
+    nscale.url = "https://www.reuters.com/nscale-anthropic"
+    nscale.full_text = (
+        "Nscale is in talks with Anthropic on a cloud deal worth about $45 billion. "
+        "The talks cover a second site that would use Nvidia chips."
+    )
+    chips = _article(
+        "ByteDance, Alibaba and Tencent order more than $35 billion of Nvidia chips",
+        "ByteDance, Alibaba and Tencent ordered Nvidia chips.",
+        kind="news",
+    )
+    chips.url = "https://www.reuters.com/nvidia-china-orders"
+    chips.full_text = (
+        "ByteDance, Alibaba and Tencent have ordered Nvidia chips priced at more than $35 billion. "
+        "The orders are for inference hardware the companies cannot fill with older stock."
+    )
+    lesser = _article(
+        "Otter.ai raises $320 million to expand its enterprise business",
+        "Otter closed a financing round.",
+        kind="news",
+    )
+    lesser.url = "https://example.com/otter"
+    pairs = [
+        (loss, "Anthropic logged a large loss", loss.full_text, "Anthropic's reported loss includes accounting charges."),
+        (nscale, "Nscale and Anthropic are in talks", nscale.full_text, "The Nscale deal changes how much compute Anthropic can buy."),
+        (lesser, "Otter raised $320 million", "Otter closed a $320 million financing round for enterprise software. The company said the round expands its sales team.", "The round funds a larger sales team."),
+    ]
+    ranked = _backfill_clear_bar([loss, nscale, chips, lesser], pairs, limit=3)
+    titles = [row[0].title for row in ranked]
+    assert any("net loss" in title for title in titles)
+    assert any("Nscale" in title for title in titles)
+    assert any("Nvidia" in title and "$35 billion" in title for title in titles)
+    assert all("Otter" not in title for title in titles)
 
 
 def test_a_major_deal_is_kept_ahead_of_llm_d():

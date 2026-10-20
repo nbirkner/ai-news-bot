@@ -50,9 +50,11 @@ def test_a_hacking_headline_stays_under_the_bar():
 def test_a_lab_loss_and_a_nscale_deal_outrank_llm_d():
     loss = article("Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports")
     nscale = article("Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal")
+    chips = article("ByteDance, Alibaba and Tencent order more than $35 billion of Nvidia chips")
     llmd = article("llm-d v1.0 brings distributed inference to Kubernetes", kind="release", source="llm-d")
     assert score_article(loss) > score_article(llmd)
     assert score_article(nscale) > score_article(llmd)
+    assert score_article(chips) > score_article(llmd)
 
 
 def test_a_frontier_round_outranks_a_generic_financing():

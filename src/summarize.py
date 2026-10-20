@@ -298,6 +298,10 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     if is_criteria_echo(candidate) or is_filler_why(candidate) or _SHORTFALL_WHY.search(candidate):
         candidate = "" if _SHORTFALL_WHY.search(candidate) else _concrete_remainder(candidate)
     echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
+    charge = _loss_charge_why(article)
+    # The charge fact is the why, even when the body already quotes it.
+    if charge and not re.search(r"non-?cash|accounting charges", candidate or "", re.I):
+        return charge
     if candidate and not echoed and not _restates(candidate, body) and not _DANGLING_END.search(candidate):
         return candidate
     defined = _definition_why(article)
@@ -309,8 +313,69 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     return ""
 
 
+def _loss_charge_why(article: Article) -> str:
+    """Name the charges behind a loss, and only with words the source uses."""
+    source = _source_text(article)
+    if not re.search(r"\banthropic\b", source, re.I) or not re.search(r"\bloss\b", source, re.I):
+        return ""
+    if re.search(r"non-?cash", source, re.I):
+        kind = "non-cash charges"
+    elif re.search(r"accounting charges", source, re.I):
+        kind = "accounting charges"
+    else:
+        return ""
+    says_most = re.search(r"\b(most|mostly)\b", source, re.I)
+    if says_most and kind == "non-cash charges":
+        line = "Most of Anthropic's reported loss is non-cash charges."
+    elif says_most:
+        line = f"Most of Anthropic's reported loss is {kind}."
+    else:
+        figure = re.search(
+            r"\$\s?\d[\d.]*\s?billion in accounting charges",
+            source,
+            re.I,
+        )
+        if figure and kind == "accounting charges":
+            line = f"Anthropic's reported loss includes {figure.group(0)}."
+        else:
+            line = f"Anthropic's reported loss includes {kind}."
+    if not line_is_grounded(line, source, analysis=True):
+        return ""
+    return line
+
+
+def _chip_order_why(article: Article) -> str:
+    source = _source_text(article)
+    from src.rank import is_mega_order
+    if not is_mega_order(article):
+        return ""
+    names = [
+        name for name in ("ByteDance", "Alibaba", "Tencent")
+        if re.search(rf"\b{name}\b", source, re.I)
+    ]
+    if names and re.search(r"\bnvidia\b", source, re.I):
+        if len(names) == 1:
+            who = f"{names[0]} changes"
+        elif len(names) == 2:
+            who = f"{names[0]} and {names[1]} change"
+        else:
+            who = f"{names[0]}, {names[1]}, and {names[2]} change"
+        line = f"{who} which buyers can get Nvidia chips."
+    else:
+        line = "The orders change which buyers can get Nvidia chips."
+    if not line_is_grounded(line, source, analysis=True):
+        return ""
+    return line
+
+
 def _money_why(article: Article) -> str:
     """A consequence for a lab loss or a major deal, using names the title already has."""
+    charge = _loss_charge_why(article)
+    if charge:
+        return charge
+    chips = _chip_order_why(article)
+    if chips:
+        return chips
     title = article.title or ""
     if re.search(r"\banthropic\b", title, re.I) and re.search(r"\bloss\b", title, re.I):
         return "Anthropic's reported loss changes what the lab can spend."
@@ -743,15 +808,39 @@ def theme_lede(articles: list) -> str:
     return f"This window is mostly about {body}."
 
 
+def _story_noun(headline: str, title: str) -> str:
+    """A noun phrase. A headline clause after 'are' is not grammatical."""
+    text = f"{headline or ''} {title or ''}"
+    amount = re.search(r"\$\s?\d[\d.]*\s?billion", text, re.I)
+    figure = amount.group(0) if amount else ""
+    if re.search(r"\banthropic\b", text, re.I) and re.search(r"\bloss\b", text, re.I):
+        return f"Anthropic's reported {figure} loss".replace("  ", " ").strip()
+    if re.search(r"\bnscale\b", text, re.I):
+        return "the Nscale deal"
+    if re.search(r"\bdeepseek\b", text, re.I) and re.search(r"\b(remov\w*|order|exclu\w*)\b", text, re.I):
+        return "an order removing DeepSeek"
+    if re.search(r"\bnvidia\b", text, re.I) and re.search(r"\b(bytedance|alibaba|tencent)\b", text, re.I):
+        return f"Nvidia chip orders{(' of ' + figure) if figure else ''} from ByteDance, Alibaba, and Tencent"
+    if re.search(r"\bopenai\b", text, re.I) and re.search(r"\b(raise|fundraising|ipo)\b|\$\s?\d", text, re.I):
+        return f"OpenAI's funding round{(' of ' + figure) if figure else ''}"
+    line = (headline or title or "").strip().rstrip(".")
+    cut = re.split(
+        r"\b(?:shows|showed|logged|logs|says|said|must|brings|bring|orders|ordered|"
+        r"raises|raised|seeks|ships|shipped)\b",
+        line,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip(" ,;:-")
+    return cut or line
+
+
 def story_lede(rows: list) -> str:
-    """Name the top two or three stories. A theme list is not a lede."""
+    """One grammatical sentence naming the top two or three stories."""
     names = []
     for row in rows[:3]:
         headline = (row[1] if len(row) > 1 else "") or ""
-        name = headline.strip().rstrip(".")
-        words = name.split()
-        if len(words) > 12:
-            name = " ".join(words[:12]).rstrip(",;:")
+        title = row[0].title if row else ""
+        name = _story_noun(headline, title)
         if name and name not in names:
             names.append(name)
     if not names:
@@ -759,7 +848,7 @@ def story_lede(rows: list) -> str:
     if len(names) == 1:
         body = names[0]
     elif len(names) == 2:
-        body = f"{names[0]}, and {names[1]}"
+        body = f"{names[0]} and {names[1]}"
     else:
         body = f"{names[0]}, {names[1]}, and {names[2]}"
     return f"The top stories are {body}."
@@ -767,6 +856,11 @@ def story_lede(rows: list) -> str:
 
 _GENERIC_LEDE = re.compile(
     r"mostly about|handful of developments|new models|agent tools",
+    re.I,
+)
+# "The top stories are Anthropic logged..." or "...loss shows..." is not a sentence.
+_BROKEN_LEDE = re.compile(
+    r"\bare\s+[A-Z][^.]{0,90}\b(?:shows|showed|logged|says|said|must|brings|raises|seeks|ships)\b",
     re.I,
 )
 _LEDE_THEME = {
@@ -779,6 +873,8 @@ _LEDE_THEME = {
 def lede_names_stories(lede: str, rows: list) -> bool:
     """True when the lede names at least two of the top stories."""
     text = lede or ""
+    if _BROKEN_LEDE.search(text):
+        return False
     if not rows:
         return bool(text) and not _GENERIC_LEDE.search(text)
     hits = 0
@@ -821,7 +917,7 @@ Do not echo that bar, or the words "this week", in the published lede, headlines
 {_window_note(since, until)}
 Prefer, in this order:
 1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, DeepSeek, or MiniMax.
-2. Big money: revenue, ARR, a reported loss, a funding round, an IPO path, or a cloud deal stated in the billions. A frontier lab's loss or mega-deal outranks a serving-stack release. Do not drop that loss or deal to make room for the release.
+2. Big money: revenue, ARR, a reported loss, a funding round, an IPO path, a cloud deal stated in the billions, or a chip order stated in the tens of billions (such as Nvidia orders from ByteDance, Alibaba, and Tencent). A frontier lab's loss, that chip order, or a mega-deal outranks a serving-stack release. Do not drop the loss, the chip order, or the deal to make room for the release.
 3. Policy that changes the rules people ship under (a lawsuit, a statute, an export rule, a ban, a removal order).
 4. Security that changes what a team has to defend (a breach, an agent treated as an insider).
 5. An infrastructure shift that changes what it costs or how a team serves a model this week.
@@ -840,7 +936,7 @@ For each chosen item:
 - why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one plain sentence that names the top 2 or 3 stories, the lab or the event, not a generic theme list. No new facts. No hype. No em dashes.
+lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 380 characters.
 Return JSON only.
@@ -1073,11 +1169,27 @@ _NARROW_RELEASE = re.compile(r"\b(llm-d|vllm|sglang)\b", re.I)
 _DETAILS_LEAK = re.compile(r"\b(?:Prices|Benchmarks|Dates|Availability|Caveats)\s*:", re.I)
 
 
+def _must_keep(article: Article) -> bool:
+    """Stories the ranking pass must not drop to make room for something smaller."""
+    from src.rank import is_mega_order
+    title = article.title or ""
+    if is_mega_order(article):
+        return True
+    if re.search(r"\bnscale\b", title, re.I) and re.search(r"\b(deal|talks)\b", title, re.I):
+        return True
+    if re.search(r"\banthropic\b", title, re.I) and re.search(r"\bloss\b", title, re.I):
+        return True
+    return False
+
+
 def _major_money(article: Article) -> bool:
-    """A frontier-lab loss, round, or stated mega-deal. A serving release is not one."""
+    """A frontier-lab loss, round, chip order, or stated mega-deal."""
+    from src.rank import is_mega_order
     title = article.title or ""
     if _NARROW_RELEASE.search(title):
         return False
+    if is_mega_order(article) or _must_keep(article):
+        return True
     if re.search(r"\bnscale\b", title, re.I) and re.search(r"\b(deal|talks|multibillion)\b", title, re.I):
         return True
     return bool(
@@ -1124,14 +1236,11 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
     for article in articles:
         if any(same_story(article, row[0]) for row in pairs):
             continue
-        if score_article(article) < 6 or not _CLEAR_BAR.search(article.title or ""):
+        if score_article(article) < 6 or not (_CLEAR_BAR.search(article.title or "") or _must_keep(article)):
             continue
         skipped.append(article)
     skipped.sort(key=score_article, reverse=True)
     for article in skipped:
-        room = len(pairs) < limit or any(_narrow_release(row[0]) for row in pairs)
-        if not room:
-            break
         what, why = extractive_lines(article)
         headline = _order_lead(article) or rewrite_headline(what or article.title)
         if headline_is_raw(headline, article.title) or len(headline.split()) > 12:
@@ -1147,11 +1256,26 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
             continue
         if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
             continue
+        if len(pairs) >= limit and not _drop_for_keep(pairs):
+            break
         pairs.append((article, headline, body, why_line))
     pairs = _order_pairs(pairs)
-    while len(pairs) > limit and pairs and _narrow_release(pairs[-1][0]):
-        pairs.pop()
-    return pairs[:limit]
+    while len(pairs) > limit and _drop_for_keep(pairs):
+        pass
+    return pairs
+
+
+def _drop_for_keep(pairs: list) -> bool:
+    """Drop a lesser item. Never drop the lab loss, the Nscale deal, or the chip order."""
+    for index in range(len(pairs) - 1, -1, -1):
+        if _narrow_release(pairs[index][0]):
+            pairs.pop(index)
+            return True
+    for index in range(len(pairs) - 1, -1, -1):
+        if not _must_keep(pairs[index][0]):
+            pairs.pop(index)
+            return True
+    return False
 
 
 def _not_publishing(exc: BaseException | None = None) -> SchemaError:

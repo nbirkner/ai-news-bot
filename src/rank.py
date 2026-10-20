@@ -25,6 +25,13 @@ _INFRA = re.compile(
     r"\b(vllm|sg ?lang|inference|tensorrt|cuda|blackwell|gpu|chip|accelerator)\b",
     re.I,
 )
+_MEGA_ORDER = re.compile(
+    r"\b(?:bytedance|alibaba|tencent)\b.{0,120}\bnvidia\b|"
+    r"\bnvidia\b.{0,120}\b(?:bytedance|alibaba|tencent)\b|"
+    r"\$\s?\d{2,}[\d.]*\s?(?:billion|bln).{0,60}\bnvidia\b|"
+    r"\bnvidia\b.{0,60}\$\s?\d{2,}[\d.]*\s?(?:billion|bln)",
+    re.I,
+)
 _LAB_MONEY = re.compile(
     r"\b(?:openai|anthropic)\b.{0,90}(?:\$\s?\d[\d.]*\s?(?:billion|bln)|net loss|\bloss\b|fundraising|\bipo\b)|"
     r"(?:\$\s?\d[\d.]*\s?(?:billion|bln)|net loss|\bloss\b|fundraising|\bipo\b).{0,90}\b(?:openai|anthropic)\b|"
@@ -82,6 +89,11 @@ _ROUNDUP_HOSTS = (
 _LAW_FIRM = re.compile(r"\b(llp|law firm|attorneys at law|client alert)\b", re.I)
 
 
+def is_mega_order(article) -> bool:
+    """Nvidia supply counted in the tens of billions, including China orders."""
+    return _MEGA_ORDER.search(getattr(article, "title", "") or "") is not None
+
+
 def is_low_trust(article) -> bool:
     """Roundups and law-firm blogs lose to a wire or a primary document."""
     host = (article.source_domain or "").lower()
@@ -112,8 +124,9 @@ def score_article(article) -> int:
         # A frontier-lab round outranks a generic $320 million financing.
         if re.search(r"\b(openai|anthropic)\b", title, re.I):
             score += 3
-    # A reported lab loss or a stated mega-deal outranks a serving-stack release.
-    if _LAB_MONEY.search(title):
+    # A reported lab loss, a stated mega-deal, or a tens-of-billions chip order
+    # outranks a serving-stack release.
+    if _LAB_MONEY.search(title) or _MEGA_ORDER.search(title):
         score += 4
     if _AGENTS.search(title):
         score += 2
