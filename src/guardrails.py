@@ -61,7 +61,7 @@ def is_public_http_url(url: str) -> bool:
 def is_generic_oneliner(headline: str, body: str) -> bool:
     """The failure mode is 'vLLM v0.32.0. It adds new features.'"""
     sentences = [sentence for sentence in split_sentences(body or "") if len(sentence) > 20]
-    if len(sentences) < 3:
+    if len(sentences) < 2:
         return True
     if _GENERIC.search(f"{headline or ''} {body or ''}") and not re.search(r"\d", body or ""):
         return True

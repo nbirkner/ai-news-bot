@@ -114,4 +114,6 @@ def prepare_candidates(
         f"Pool {len(result.pool)} after dedupe, shortlist {len(result.shortlist)} for reading",
         file=sys.stderr,
     )
+    for index, article in enumerate(result.shortlist, start=1):
+        print(f"  {index}. {article.source_name}: {article.title}", file=sys.stderr)
     return result

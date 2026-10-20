@@ -37,6 +37,15 @@ def test_market_blurb_stays_under_the_bar():
     assert score_article(article("Red hot CPI report fuels AI rout")) < 6
 
 
+def test_a_ban_and_a_mega_round_clear_the_bar():
+    assert score_article(article("U.S. bans DeepSeek from government agency systems")) >= 6
+    assert score_article(article("OpenAI races to raise $30 billion ahead of an Anthropic IPO")) >= 6
+
+
+def test_a_hacking_headline_stays_under_the_bar():
+    assert score_article(article("AI agents are hacking John Deere equipment")) < 6
+
+
 def test_office_opening_stays_under_the_bar():
     assert score_article(article("Anthropic opens Singapore office and signs MOU", kind="lab", source="Anthropic")) < 6
 

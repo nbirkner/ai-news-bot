@@ -501,11 +501,14 @@ def test_config_and_workflow_name_the_new_sources():
     import yaml
     config = yaml.safe_load(Path("config.yaml").read_text())
     names = {source["name"] for source in config["sources"]}
-    for name in ("Politico", "CNBC", "TechCrunch", "Fortune", "DeepSeek", "Qwen", "Moonshot", "Hugging Face trending"):
+    for name in (
+        "Politico", "CNBC", "TechCrunch", "Fortune", "DeepSeek", "Qwen", "Moonshot",
+        "Hugging Face trending", "Investing.com", "Federal Register", "Meta Engineering", "MiniMax",
+    ):
         assert name in names
     assert config["together_model"] == "zai-org/GLM-5.3"
     assert config["llm_rank"] is True
-    assert config["read_candidates"] == 15
+    assert config["read_candidates"] == 20
     assert config["exa_max_calls"] == 30
     workflow = Path(".github/workflows/briefing.yml").read_text()
     assert "EXA_API_KEY" in workflow

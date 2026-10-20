@@ -42,6 +42,11 @@ def _issue(items=None, **kwargs):
 
 def test_generic_oneliner_rejects_the_release_note():
     assert is_generic_oneliner("vLLM v0.32.0", "It adds new features.")
+    assert not is_generic_oneliner(
+        "DeepSeek removed from federal systems",
+        "DHS published an order removing DeepSeek from civilian agency systems. "
+        "The notice covers procurements and products already installed.",
+    )
     assert "generic one-liner" in item_drop_reasons(
         _item(what_happened="vLLM v0.32.0", body="It adds new features.")
     )

@@ -15,6 +15,12 @@ def _when(moment: datetime) -> str:
     return f"{local.strftime('%A, %B')} {local.day}"
 
 
+def _clock(moment: datetime) -> str:
+    local = moment.astimezone(PACIFIC)
+    hour = str(int(local.strftime("%I")))
+    return f"{local.strftime('%a %b')} {local.day}, {hour}:{local.strftime('%M %p')}"
+
+
 def slack_link(url: str, label: str) -> str:
     safe_url = slack_escape(url)
     safe_label = slack_escape(label).replace("|", "")
@@ -30,10 +36,11 @@ def render_briefing(now: datetime, since: datetime, items: list, lede: str = "")
             "policy news worth flagging from the sources we watch.\n"
         )
     # A lede replaces the "Since ..." line. An empty lede keeps the old layout.
+    stamp = f"Window: {_clock(since)} to {_clock(now)} PT"
     if lede:
-        lines = [header, slack_escape(lede), ""]
+        lines = [header, stamp, slack_escape(lede), ""]
     else:
-        lines = [header, f"Since {_when(since)}.", ""]
+        lines = [header, stamp, ""]
     for item in items:
         lines.append(f"*{slack_escape(item.what_happened)}*")
         if getattr(item, "body", ""):

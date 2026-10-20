@@ -5,6 +5,8 @@ from src.fetch import (
     enrich_previews,
     in_window,
     parse_anthropic_html,
+    parse_blog_index,
+    parse_federal_register,
     parse_meta_html,
     parse_reuters_sitemap,
 )
@@ -171,3 +173,55 @@ def test_enrich_fills_a_thin_preview():
     )
     enrich_previews([item], getter=lambda url: html)
     assert "preparing its models" in item.content_preview
+
+
+def test_federal_register_keeps_an_ai_order_and_drops_a_lab_accreditation():
+    source = {
+        "name": "Federal Register",
+        "domain": "federalregister.gov",
+        "kind": "news",
+        "priority": 1,
+    }
+    payload = {"results": [
+        {
+            "title": "Notice of Order Regarding Exclusion and Removal of DeepSeek Products",
+            "abstract": "The Department of Homeland Security is publishing notice of an order removing DeepSeek products from federal civilian agency systems.",
+            "html_url": "https://www.federalregister.gov/documents/2026/10/20/example",
+            "publication_date": "2026-10-20",
+        },
+        {
+            "title": "Accreditation of SGS North America as a Commercial Laboratory",
+            "abstract": "Notice of accreditation for a gauging laboratory.",
+            "html_url": "https://www.federalregister.gov/documents/2026/10/20/other",
+            "publication_date": "2026-10-20",
+        },
+    ]}
+    articles = parse_federal_register(source, payload)
+    assert len(articles) == 1
+    assert "DeepSeek" in articles[0].title
+    assert articles[0].published_at == datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+    assert "federal civilian" in articles[0].full_text
+
+
+def test_blog_index_reads_the_post_date_and_treats_midnight_as_morning():
+    source = {
+        "name": "MiniMax",
+        "url": "https://www.minimax.io/blog",
+        "domain": "minimax.io",
+        "kind": "lab",
+        "priority": 1,
+        "max_results": 2,
+    }
+    index = '<a href="/blog/minimax-m31f">MiniMax M3.1 Flash</a><a href="/blog">Blog</a>'
+    page = """
+    <html><head>
+      <meta property="og:title" content="MiniMax M3.1 Flash: agent model | MiniMax">
+      <meta property="og:description" content="MiniMax M3.1 Flash is a 428B model with 23B active parameters.">
+      <script type="application/ld+json">{"datePublished":"2026-10-19T00:00:00.000Z"}</script>
+    </head></html>
+    """
+    articles = parse_blog_index(source, index, getter=lambda url: page)
+    assert len(articles) == 1
+    assert articles[0].title.startswith("MiniMax M3.1 Flash")
+    assert articles[0].published_at == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert "428B" in articles[0].content_preview

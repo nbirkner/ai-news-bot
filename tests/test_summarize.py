@@ -239,7 +239,7 @@ def test_still_short_body_raises_a_clear_error(monkeypatch):
             require_full_body=True,
         )
     message = str(exc.value)
-    assert "body needs at least 3 sentences" in message
+    assert "body needs at least 2 sentences" in message
     assert "about" in message and "tokens" in message
     assert "Retried once" in message
     assert "still too short to publish" in message
@@ -266,6 +266,38 @@ def test_filler_why_names_the_story_instead_of_a_slogan():
     line = specific_why(_article("Claude traces in OpenTelemetry beta", "Claude traces in OpenTelemetry beta."))
     assert "Claude traces" in line
     assert not is_filler_why(line)
+
+
+def test_a_removal_order_gets_a_short_lead_and_a_specific_why():
+    from src.summarize import _order_lead, _order_why
+    title = (
+        "Notice of Order Regarding Exclusion and Removal of DeepSeek Products "
+        "From Federal Civilian Executive Branch Information Technology Systems and Procurements"
+    )
+    article = _article(title, title, kind="news")
+    article.source_domain = "federalregister.gov"
+    lead = _order_lead(article)
+    why = _order_why(article)
+    assert lead.startswith("Order excludes and removes DeepSeek Products")
+    assert "procurements" in why
+    assert "bring up" not in why
+
+
+def test_a_cost_cut_is_not_labeled_as_a_benchmark():
+    from src.summarize import label_benchmark
+    article = _article(
+        "MiniMax M3.1 Flash",
+        "The evaluation reports 73.7% on the coding benchmark.",
+        kind="lab",
+    )
+    article.source_domain = "minimax.io"
+    article.full_text = "The evaluation reports 73.7% on the coding benchmark."
+    cost_only = "It cuts agentic costs by 70% at $0.15 per million tokens. Weights ship later."
+    assert "vendor-reported" not in label_benchmark(cost_only, article)
+    scored = "It scores 73.7% on the coding benchmark. Weights ship later."
+    labeled = label_benchmark(scored, article)
+    assert "benchmark, a vendor-reported figure." in labeled
+    assert "Weights ship later." in labeled
 
 
 def test_extractive_uses_a_source_why_line_when_it_is_present():

@@ -1,6 +1,7 @@
 import json
 import re
 import sys
+import time
 
 import requests
 
@@ -107,12 +108,54 @@ def is_filler_why(line: str) -> bool:
     return bool(_FILLER_WHY.search(line or ""))
 
 
+def _short_lead(text: str, limit: int = 110) -> str:
+    cleaned = clean_line(text or "").rstrip(".")
+    if len(cleaned) <= limit:
+        return cleaned
+    cut = cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+    while cut.split() and cut.split()[-1].lower() in {
+        "from", "of", "the", "and", "or", "a", "to", "for", "in", "on", "with",
+    }:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut or cleaned[:limit]
+
+
 def specific_why(article: Article) -> str:
     """One line a builder or an exec could repeat. Uses the headline, no new facts."""
-    title = clean_line(article.title).rstrip(".")
+    title = _short_lead(article.title, 80)
     if not title:
         return ""
     return f"A builder or an AI exec would bring up {title} this week."
+
+
+_ORDER_TITLE = re.compile(r"exclusion and removal of (.+?) from\b", re.I)
+
+
+def _order_lead(article: Article) -> str:
+    """A short lead for a removal order, using only words from the document title."""
+    match = _ORDER_TITLE.search(article.title or "")
+    if not match:
+        return ""
+    product = match.group(1).strip(" .")
+    lead = f"Order excludes and removes {product} from federal civilian systems."
+    if line_is_grounded(lead, _source_text(article), analysis=False):
+        return lead.rstrip(".")
+    return ""
+
+
+def _order_why(article: Article) -> str:
+    """Consequence of a removal order, still using only the document's own words."""
+    match = _ORDER_TITLE.search(article.title or "")
+    if not match:
+        return ""
+    product = match.group(1).strip(" .")
+    line = (
+        f"The order takes {product} out of federal civilian procurements "
+        "and out of systems already covered by the notice."
+    )
+    if line_is_grounded(line, _source_text(article), analysis=True):
+        return line
+    return ""
 
 
 def topic_for(article: Article) -> str:
@@ -201,15 +244,30 @@ def _truncation_error(meta: dict) -> SchemaError:
 
 def _call_together(prompt: str, api_key: str, model: str) -> str:
     def send(payload: dict):
-        return requests.post(
-            TOGETHER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=90,
-        )
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    TOGETHER_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=120,
+                )
+            except requests.Timeout:
+                if attempt == 2:
+                    raise
+                print("Warning: Together timed out. Retrying.", file=sys.stderr)
+                time.sleep(5)
+                continue
+            if response.status_code == 429 and attempt < 2:
+                print("Warning: Together rate limited. Retrying.", file=sys.stderr)
+                time.sleep(8 * (attempt + 1))
+                continue
+            return response
+        return response
 
     def once(max_tokens: int) -> dict:
         payload = {
@@ -286,7 +344,7 @@ def _prompt(articles: list) -> str:
 Rules:
 - Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
 - headline: one specific claim, not a version number alone.
-- body: 3 to 5 sentences of concrete facts from that item's text. A body under 3 sentences is invalid. Keep prices, benchmark numbers, dates, and availability. If the text says a figure is company-reported or unaudited, keep that caveat. If the text cannot support 3 factual sentences, omit the item.
+- body: 2 to 3 sentences of concrete facts from that item's text. A body under 2 sentences is invalid. Keep prices, benchmark numbers, dates, and availability. If a benchmark comes from the company that built the model, label it company-reported, or vendor-reported on a vendor post. If the text cannot support 2 factual sentences, omit the item.
 - why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not.
 - Public information only. No private companies' internal notes, customers, or revenue, and no product pitch.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
@@ -382,22 +440,24 @@ def _rank_prompt(articles: list, recent: list, limit: int) -> str:
 
 The bar for keeping a story: would a builder or an AI exec bring it up this week?
 Prefer, in this order:
-1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, or DeepSeek.
+1. A frontier-lab move from OpenAI, Anthropic, Google, Meta, Microsoft, xAI, Mistral, DeepSeek, or MiniMax.
 2. Big money: revenue, ARR, a funding round, or an IPO path, when the text states the figure.
-3. Policy that changes the rules people ship under (a lawsuit, a statute, an export rule, a safety order).
-4. An infrastructure shift that changes what it costs or how a team serves a model this week.
+3. Policy that changes the rules people ship under (a lawsuit, a statute, an export rule, a ban, a removal order).
+4. Security that changes what a team has to defend (a breach, an agent treated as an insider).
+5. An infrastructure shift that changes what it costs or how a team serves a model this week.
 Skip routine patch notes, office openings, customer case studies, market blurbs, and commentary that does not change what someone can ship, pay, or comply with.
 Include a release note only when the text names a concrete change a team would act on this week.
 Skip a note that only says new features or bug fixes.
 Skip stories that are already in the recent briefings unless the new piece is a real development.
-Return between 4 and {limit} items when that many clear the bar. Return fewer when the window is thin. Return an empty list when every candidate is noise. Never invent an item to fill the count.
+Do not return two items that are the same event from different outlets. Keep the primary document or the wire, and use the version whose text actually states the figures.
+Return between 4 and {limit} items when that many clear the bar. A federal exclusion or removal order clears the bar. A stated mega-round, revenue figure, or IPO path clears the bar. A security change that treats agents as insiders, or a breach with a stated scale, clears the bar. A frontier model with a stated price, size, or benchmark clears the bar. Include those ahead of a narrower product SDK or a small acquisition when both are in the candidates. Return fewer only when the window does not contain that many. Return an empty list when every candidate is noise. Never invent an item to fill the count.
 Public sources only. Do not mention a vendor's private customer list or unpublished revenue. Public revenue, ARR, funding, and IPO figures stay when that item's text states them. Do not add a name or number that is not in that item's text.
-A hard number stays only when it appears in that item's text. Prefer the lab's own post or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press) over a recap that does not show the figure. If the text says a figure is company-reported or unaudited, keep that caveat.
+A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press) over a recap that does not show the figure. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it. On a vendor's own post, vendor-reported is the same caveat.
 
 For each chosen item:
-- headline: a specific claim a reader can scan. Not a bare version number.
-- body: 3 to 5 sentences of prose from that item's text only. A body under 3 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. If the text cannot support 3 factual sentences, omit the item. Do not return a one-sentence or two-sentence body. Do not paste a table, a markdown heading, or the raw page.
-- why_it_matters: one specific sentence naming the consequence for this story (the number, the rule, the product, or the cost). Interpretation is allowed. New facts are not. No filler. Do not write "worth a look" or a generic line about people building with AI.
+- headline: a short scannable lead, under 90 characters, with the spec or the number (dollars, percent, parameter count, or date). Not a bare version number, not a document title, and not a full paragraph.
+- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. If the text cannot support 2 factual sentences, omit the item.
+- why_it_matters: one specific sentence naming the consequence for this story (the number, the rule, the product, or the cost). Interpretation is allowed. New facts are not. Do not repeat a sentence from the body. No filler. Do not write "worth a look" or a generic line about people building with AI.
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one plain sentence that connects the chosen themes. No new facts. No hype. No em dashes.
@@ -452,8 +512,8 @@ def factual_body(article: Article) -> str:
         seen.add(key)
         kept.append(cleaned)
     numbered = [sentence for sentence in kept if re.search(r"\d", sentence)]
-    chosen = numbered if len(numbered) >= 3 else kept
-    return " ".join(chosen[:5])
+    chosen = numbered if len(numbered) >= 2 else kept
+    return " ".join(chosen[:3])
 
 
 def _body_length_note(row: dict) -> str:
@@ -474,9 +534,9 @@ def _require_schema(payload) -> None:
         for key in ("headline", "body", "why_it_matters"):
             if not str(row.get(key) or "").strip():
                 raise SchemaError(f"LLM output failed schema validation: missing {key}")
-        if len(split_sentences(str(row["body"]))) < 3:
+        if len(split_sentences(str(row["body"]))) < 2:
             raise SchemaError(
-                "LLM output failed schema validation: body needs at least 3 sentences "
+                "LLM output failed schema validation: body needs at least 2 sentences "
                 f"({_body_length_note(row)})"
             )
 
@@ -485,15 +545,15 @@ def _repair_prompt(prompt: str, payload) -> str:
     notes = []
     rows = payload.get("items") if isinstance(payload, dict) else None
     for row in rows or []:
-        if isinstance(row, dict) and len(split_sentences(str(row.get("body") or ""))) < 3:
+        if isinstance(row, dict) and len(split_sentences(str(row.get("body") or ""))) < 2:
             notes.append(_body_length_note(row))
-    detail = "; ".join(notes) if notes else "a body was under 3 sentences"
+    detail = "; ".join(notes) if notes else "a body was under 2 sentences"
     return prompt + f"""
 
 The previous draft was rejected: {detail}.
-Write the JSON again. Every body must be 3 to 5 complete sentences using only that item's text.
-If an item cannot support 3 factual sentences, omit it.
-Do not stop after one or two sentences. Return JSON only.
+Write the JSON again. Every body must be 2 to 3 complete sentences using only that item's text.
+If an item cannot support 2 factual sentences, omit it.
+Do not stop after one sentence. Return JSON only.
 """
 
 
@@ -503,7 +563,7 @@ def _schema_or_retry(payload, prompt: str, api_key: str, model: str):
         _require_schema(payload)
         return payload
     except SchemaError as exc:
-        if "at least 3 sentences" not in str(exc):
+        if "at least 2 sentences" not in str(exc):
             raise
         print(f"Warning: {exc} Retrying once.", file=sys.stderr)
         try:
@@ -525,18 +585,89 @@ def _schema_or_retry(payload, prompt: str, api_key: str, model: str):
 _MARKDOWN_DUMP = re.compile(r"(\| ---|```|^# |license:\s*mit)", re.I | re.M)
 
 
+def _unique_sentences(text: str) -> str:
+    kept = []
+    seen = set()
+    for sentence in split_sentences(text or ""):
+        key = re.sub(r"\W+", " ", sentence.lower()).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        kept.append(sentence)
+    return " ".join(kept)
+
+
+def _limit_sentences(text: str, count: int = 3) -> str:
+    return " ".join(split_sentences(text or "")[:count])
+
+
+def _drop_repeated_why(body: str, why: str) -> str:
+    why_key = re.sub(r"\W+", " ", (why or "").lower()).strip()
+    if not why_key:
+        return body
+    kept = []
+    for sentence in split_sentences(body or ""):
+        key = re.sub(r"\W+", " ", sentence.lower()).strip()
+        if key and key != why_key:
+            kept.append(sentence)
+    return " ".join(kept)
+
+
+_BENCH_SENTENCE = re.compile(
+    r"evaluat|benchmark|accuracy|pass rate|\bscore\b",
+    re.I,
+)
+
+
+def label_benchmark(body: str, article: Article) -> str:
+    """Mark a lab or vendor accuracy figure the model left unlabeled.
+
+    A price or cost percent is not a benchmark, so the caveat stays on the
+    sentence that states the score.
+    """
+    text = body or ""
+    if not re.search(r"\d+(?:\.\d+)?\s?%", text):
+        return text
+    domain = (article.source_domain or "").lower()
+    vendor = "minimax." in domain
+    lowered = text.lower()
+    if vendor and "vendor-reported" not in lowered and "company-reported" in lowered:
+        return re.sub("company-reported", "vendor-reported", text, count=1, flags=re.I)
+    if "company-reported" in lowered or "vendor-reported" in lowered:
+        return text
+    if article.source_kind != "lab" and not vendor:
+        return text
+    source = f"{article.full_text or ''} {article.content_preview or ''}"
+    if not _BENCH_SENTENCE.search(source):
+        return text
+    word = "vendor-reported" if vendor else "company-reported"
+    labeled = False
+    out = []
+    for sentence in split_sentences(text):
+        has_percent = re.search(r"\d+(?:\.\d+)?\s?%", sentence) is not None
+        if not labeled and has_percent and _BENCH_SENTENCE.search(sentence):
+            stripped = sentence.rstrip(".")
+            out.append(f"{stripped}, a {word} figure.")
+            labeled = True
+        else:
+            out.append(sentence if sentence.endswith((".", "!", "?")) else sentence)
+    if not labeled:
+        return text
+    return " ".join(out)
+
+
 def _publishable_body(body: str, article: Article) -> str:
-    """Keep grounded sentences. If that filter leaves under 3, use the source."""
-    grounded = _grounded_body(body, article)
+    """Keep grounded sentences. If that filter leaves under 2, use the source."""
+    grounded = _unique_sentences(_grounded_body(body, article))
     # A model card paste is not a briefing. Prefer sentences taken from the page.
     if _MARKDOWN_DUMP.search(grounded or ""):
         grounded = ""
-    if len(split_sentences(grounded)) >= 3:
-        return grounded
+    if len(split_sentences(grounded)) >= 2:
+        return _limit_sentences(grounded)
     sourced = factual_body(article)
-    if len(split_sentences(sourced)) >= 3:
-        return sourced
-    return grounded or sourced
+    if len(split_sentences(sourced)) >= 2:
+        return _limit_sentences(sourced)
+    return _limit_sentences(grounded or sourced)
 
 
 def _grounded_body(body: str, article: Article) -> str:
@@ -547,6 +678,52 @@ def _grounded_body(body: str, article: Article) -> str:
         if cleaned and line_is_grounded(cleaned, source, analysis=False):
             kept.append(cleaned)
     return " ".join(kept)
+
+
+_CLEAR_BAR = re.compile(
+    r"\b(exclusion|barred)\b|\$\s?\d[\d.]*\s?(?:billion|bln)\b",
+    re.I,
+)
+
+
+def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
+    """Keep a stated mega-round or removal order when the draft skipped it.
+
+    The ranker already treats those as the bar. A single sample should not
+    drop one to make room for a second copy of a smaller item.
+    """
+    from src.dedupe import same_story
+    from src.rank import score_article
+
+    unique = []
+    for row in pairs:
+        if any(same_story(row[0], previous[0]) for previous in unique):
+            continue
+        unique.append(row)
+    pairs = unique
+    skipped = []
+    for article in articles:
+        if any(same_story(article, row[0]) for row in pairs):
+            continue
+        if score_article(article) < 6 or not _CLEAR_BAR.search(article.title or ""):
+            continue
+        skipped.append(article)
+    skipped.sort(key=score_article, reverse=True)
+    for article in skipped:
+        if len(pairs) >= limit:
+            break
+        what, why = extractive_lines(article)
+        headline = _order_lead(article) or _short_lead(what or article.title, 110)
+        body = label_benchmark(factual_body(article), article)
+        if len(split_sentences(body)) < 2:
+            continue
+        why_line = _order_why(article) or why
+        if is_filler_why(why_line):
+            why_line = specific_why(article)
+        if not line_is_grounded(why_line, _source_text(article), analysis=True):
+            continue
+        pairs.append((article, headline, body, why_line))
+    return pairs
 
 
 def _fallback_pairs(articles: list, limit: int) -> tuple:
@@ -616,10 +793,16 @@ def compose_briefing(
         what_fb, why_fb = extractive_lines(article)
         headline_raw = str(row.get("headline") or row.get("what_happened") or "")
         headline = _accept(headline_raw, article, analysis=False, fallback=what_fb)
-        body = _publishable_body(str(row.get("body") or ""), article)
+        order_lead = _order_lead(article)
+        if order_lead and (len(headline) > 90 or headline.lower().startswith("the ")):
+            headline = order_lead
+        elif len(headline) > 110:
+            headline = _short_lead(headline, 110) or _short_lead(article.title, 110)
+        body = label_benchmark(_publishable_body(str(row.get("body") or ""), article), article)
         why = _accept(str(row.get("why_it_matters") or ""), article, analysis=True, fallback=why_fb)
-        if is_filler_why(why):
-            cited = specific_why(article)
+        body = _drop_repeated_why(body, why)
+        if is_filler_why(why) or (order_lead and why.lower().startswith("a builder or an ai exec")):
+            cited = _order_why(article) or specific_why(article)
             if line_is_grounded(cited, _source_text(article), analysis=True):
                 why = cited
         pairs.append((article, headline, body, why))
@@ -629,6 +812,8 @@ def compose_briefing(
     if not pairs:
         # The model looked and found nothing worth posting.
         return "", []
+
+    pairs = _backfill_clear_bar(articles, pairs, limit)
 
     combined = "\n".join(_source_text(row[0]) for row in pairs)
     lede = clean_line(str(payload.get("lede") or ""), limit=320)

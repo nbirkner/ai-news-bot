@@ -77,7 +77,7 @@ def test_rank_prompt_has_no_together_angle():
     assert "for together" not in prompt
     assert "together ai" not in prompt
     assert "headline" in prompt
-    assert "3 to 5" in prompt
+    assert "2 to 3" in prompt
     assert "bring it up this week" in prompt
     assert "revenue" in prompt
     assert "worth a look" in prompt
@@ -99,6 +99,30 @@ def test_schema_failure_raises_when_a_full_body_is_required(monkeypatch):
         assert False, "expected SchemaError"
     except SchemaError as exc:
         assert "schema validation" in str(exc)
+
+
+def test_window_start_overrides_the_previous_slot(monkeypatch):
+    seen = {}
+
+    def fake_generate(config, **kwargs):
+        seen["since"] = kwargs["since"]
+        seen["until"] = kwargs["until"]
+        return _issue(), [], type("Discovered", (), {"exa_search_calls": 0, "exa_content_pages": 0})()
+
+    monkeypatch.setattr("main_newsletter.generate_issue", fake_generate)
+    monkeypatch.setenv("OUT_DIR", "/tmp/window-start-test")
+    from main_newsletter import main
+    code = main([
+        "main_newsletter.py",
+        "--dry-run",
+        "--window-start",
+        "2026-10-19T15:00:00Z",
+        "--window-end",
+        "2026-10-20T18:00:00Z",
+    ])
+    assert code == 0
+    assert seen["since"] == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert seen["until"] == datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
 
 
 def test_window_end_dates_match_the_mwf_cadence():

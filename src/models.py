@@ -37,6 +37,7 @@ class Issue:
     items: list
     since: datetime | None = None
     until: datetime | None = None
+    also_in_window: tuple = ()  # titles that were in the window and did not make the list
 
 
 @dataclass

@@ -70,6 +70,52 @@ def test_unrelated_items_that_share_a_lab_name_stay_separate():
     assert not same_event(launch, lawsuit)
 
 
+def test_a_rewritten_wire_is_the_same_funding_story():
+    wire = article(
+        "https://www.reuters.com/world/openai-raise",
+        "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO, sources say",
+        priority=2,
+    )
+    recap = article(
+        "https://www.pymnts.com/openai-raise",
+        "OpenAI races to raise $30 billion ahead of Anthropic IPO",
+        priority=2,
+        preview="OpenAI is racing to raise $30 billion at a valuation above $1.4 trillion, Reuters reported.",
+    )
+    assert same_story(wire, recap)
+    kept = dedupe_articles([wire, recap])
+    assert len(kept) == 1
+    assert kept[0].url == recap.url
+
+
+def test_two_outlets_covering_one_acquisition_are_the_same_story():
+    lab = article(
+        "https://openai.com/index/openai-to-acquire-orchestra-bio",
+        "OpenAI acquires Orchestra Bio",
+        priority=1,
+        kind="lab",
+    )
+    wire = article(
+        "https://www.axios.com/2026/10/20/exclusive-openai-biotech-startup-drug-development",
+        "Exclusive: OpenAI has acquired Orchestra Bio",
+        priority=3,
+    )
+    assert same_story(lab, wire)
+    other = article(
+        "https://openai.com/other",
+        "OpenAI acquires a chip design team",
+        priority=1,
+        kind="lab",
+    )
+    assert not same_story(lab, other)
+
+
+def test_a_model_launch_is_not_the_same_story_as_a_funding_round():
+    launch = article("https://openai.com/gpt", "OpenAI releases a new model for coding", priority=1, kind="lab")
+    money = article("https://www.reuters.com/raise", "OpenAI seeks to accelerate fundraising ahead of Anthropic IPO")
+    assert not same_story(launch, money)
+
+
 def test_dedupe_keeps_the_lab_over_the_recap():
     lab = article(
         "https://openai.com/news/model",

@@ -24,7 +24,7 @@ def test_render_one_item():
     text = render_briefing(NOW, SINCE, [_item()])
     assert text == (
         "*AI briefing, Wednesday, October 14*\n"
-        "Since Sunday, October 11.\n"
+        "Window: Sun Oct 11, 12:00 AM to Wed Oct 14, 8:00 AM PT\n"
         "\n"
         "*Eight US states sued OpenAI over harm to children.*\n"
         "A legal or policy move changes the constraints on building and shipping AI products.\n"

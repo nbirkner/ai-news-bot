@@ -11,13 +11,13 @@ _MODEL = re.compile(
 )
 _STRONG_POLICY = re.compile(
     r"\b(regulat\w*|lawsuit|sues|sued|sue\b|executive order|export control|"
-    r"antitrust|bankrupt\w*|midterms?|election)\b",
+    r"antitrust|bankrupt\w*|midterms?|election|bans?|barred|exclusion)\b",
     re.I,
 )
 _MILD_POLICY = re.compile(r"\b(polic(?:y|ies)|legislation|memorandum|\bmou\b)\b", re.I)
 _STRONG_SAFETY = re.compile(
     r"\b(jailbreaks?|vulnerabilit\w*|zero-day|cyber ?attacks?|espionage|"
-    r"spies|spying|data breach|responsible scaling)\b",
+    r"spies|spying|data breach|responsible scaling|insider threats?)\b",
     re.I,
 )
 _MILD_SAFETY = re.compile(r"\b(safety|security|misuse|bio-?risk)\b", re.I)
@@ -26,9 +26,11 @@ _INFRA = re.compile(
     re.I,
 )
 _DEAL = re.compile(
-    r"\b(acqui(?:res|red|sition)|merger|funding round|series [a-e]|raises \$)\b",
+    r"\b(acqui(?:res|red|sition)|merger|funding round|series [a-e]|raises \$|"
+    r"raise[sd]?\s+\$|fundraising|valuation|ipo)\b",
     re.I,
 )
+_NAMED_MODEL = re.compile(r"\b(minimax|kimi)\b", re.I)
 _AGENTS = re.compile(r"\bagents?\b|\bcomputer use\b|\btool use\b", re.I)
 _OPEN_WEIGHTS = re.compile(r"\bopen[- ]weights?\b|\bopen source model\b", re.I)
 
@@ -37,7 +39,7 @@ _OPINION = re.compile(
     re.I,
 )
 _MARKET = re.compile(
-    r"\b(nasdaq|wall street|stocks?|shares|s&p|dow jones|rout)\b",
+    r"\b(nasdaq|wall street|stocks?|shares|s&p|dow jones|rout|markets?)\b",
     re.I,
 )
 _PRERELEASE = re.compile(
@@ -57,7 +59,7 @@ def score_article(article) -> int:
     title = article.title or ""
     score = _KIND_BONUS.get(article.source_kind, 0)
     has_model = _MODEL.search(title) is not None
-    if has_model:
+    if has_model or _NAMED_MODEL.search(title):
         score += 8
     if _STRONG_POLICY.search(title):
         score += 6
@@ -162,7 +164,7 @@ def bucket_for(article) -> str:
     """Coarse topic, so a low keyword score cannot crowd out a whole theme."""
     title = article.title or ""
     if re.search(
-        r"deepseek|qwen|kimi|moonshot|gpt-\d|claude \d|gemini \d|llama \d|"
+        r"deepseek|qwen|kimi|moonshot|minimax|gpt-\d|claude \d|gemini \d|llama \d|"
         r"open[- ]weights?|foundation model",
         title,
         re.I,
@@ -192,55 +194,51 @@ def bucket_for(article) -> str:
 
 
 def shortlist_for_reading(articles: list, *, limit: int = 15) -> list:
-    """Pick a diverse set for full-text reading. The model ranks this set.
+    """Pick what a builder would rank first, then fill out the other themes.
 
-    Keyword score is not a cutoff. Hard noise is dropped. Within a topic,
-    newer items come first so a quiet headline is not buried under patch notes.
+    Hard noise is dropped. Keyword score is not a hard cutoff: a quiet
+    headline still gets a slot when the high-score items do not fill the list.
+    One feed cannot take more than three of the score-ranked slots.
     """
     pool = [article for article in articles if not hard_noise(article)]
-    buckets = {name: [] for name in _BUCKET_ORDER}
+    ranked = sorted(
+        pool,
+        key=lambda article: (score_article(article), article.published_at.timestamp()),
+        reverse=True,
+    )
     chosen = []
     seen = set()
+    per_source = {}
 
-    def add(article) -> None:
+    def add(article, *, cap: int | None) -> bool:
         key = (article.source_name, article.title)
         if key in seen or len(chosen) >= limit:
-            return
+            return False
+        if cap is not None and per_source.get(article.source_name, 0) >= cap:
+            return False
         seen.add(key)
         chosen.append(article)
+        per_source[article.source_name] = per_source.get(article.source_name, 0) + 1
+        return True
 
-    # A source with one or two items in the window is usually the reason that
-    # feed exists. Keep those even when a busier feed published later.
-    counts = {}
-    for article in pool:
-        counts[article.source_name] = counts.get(article.source_name, 0) + 1
-    sparse = sorted(
-        (article for article in pool if counts[article.source_name] <= 2),
-        key=lambda article: (article.source_priority, -article.published_at.timestamp()),
-    )
-    for article in sparse:
-        add(article)
-        if len(chosen) >= min(limit, 8):
+    for article in ranked:
+        add(article, cap=3)
+        if len(chosen) >= limit:
             break
-    ordered = sorted(pool, key=lambda article: article.published_at, reverse=True)
-    for article in ordered:
-        buckets[bucket_for(article)].append(article)
-    while len(chosen) < limit:
-        progressed = False
-        for name in _BUCKET_ORDER:
-            # Skip items the sparse pass already kept, and take the next new one.
-            # Stopping on an all-seen pass would drop later stories in that topic.
-            while buckets[name]:
-                article = buckets[name].pop(0)
-                key = (article.source_name, article.title)
-                if key in seen:
-                    continue
-                seen.add(key)
-                chosen.append(article)
-                progressed = True
+    if len(chosen) < limit:
+        buckets = {name: [] for name in _BUCKET_ORDER}
+        for article in ranked:
+            buckets[bucket_for(article)].append(article)
+        while len(chosen) < limit:
+            progressed = False
+            for name in _BUCKET_ORDER:
+                while buckets[name]:
+                    article = buckets[name].pop(0)
+                    if add(article, cap=None):
+                        progressed = True
+                        break
+                if len(chosen) >= limit:
+                    break
+            if not progressed:
                 break
-            if len(chosen) >= limit:
-                break
-        if not progressed:
-            break
     return chosen

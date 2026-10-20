@@ -47,6 +47,13 @@ _PAYWALL = (
     "nytimes.com",
     "politico.com",
 )
+# Lab and company posts often 403 a bot. A reader proxy is the fallback.
+_READER_HOSTS = (
+    "openai.com",
+    "minimax.io",
+    "engineering.fb.com",
+    "microsoft.com",
+)
 
 
 def extract_html_text(raw: str) -> str:
@@ -128,6 +135,20 @@ def _huggingface_readme(url: str) -> str:
     return f"https://huggingface.co/{parts[0]}/{parts[1]}/raw/main/README.md"
 
 
+def _reader_text(url: str) -> str:
+    """Fallback when a lab page returns 403 to a plain GET."""
+    try:
+        raw = http_get("https://r.jina.ai/" + url).text
+    except Exception as exc:
+        print(f"Warning: reader fallback failed for {url}: {exc}", file=sys.stderr)
+        return ""
+    if "Markdown Content:" in raw:
+        raw = raw.split("Markdown Content:", 1)[1]
+    if "captcha" in raw[:400].lower():
+        return ""
+    return collapse_ws(raw)
+
+
 def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None, getter=None, contents=None) -> None:
     """Fill full_text and details in place. Failures stay on the preview."""
     getter = getter or (lambda url: http_get(url).text)
@@ -151,6 +172,17 @@ def read_articles(articles: list, *, exa_api_key: str | None = None, budget=None
         text = extract_html_text(raw) if "<" in raw[:500].lower() else collapse_ws(raw)
         if len(text) > len(article.full_text or ""):
             article.full_text = text[:12000]
+    for article in articles:
+        if len(article.full_text or "") >= 400:
+            continue
+        host = urlparse(article.url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not any(host == bit or host.endswith("." + bit) for bit in _READER_HOSTS):
+            continue
+        extra = _reader_text(article.url)
+        if len(extra) > len(article.full_text or ""):
+            article.full_text = extra[:12000]
     thin = [article for article in articles if len(article.full_text or "") < 400]
     if thin and exa_api_key and budget is not None:
         mapping = contents(exa_api_key, [article.url for article in thin], budget)

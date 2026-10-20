@@ -67,6 +67,11 @@ _HOSTS = (
     ("fortune.com", "Fortune", "news", 2),
     ("theverge.com", "The Verge", "news", 3),
     ("axios.com", "Axios", "news", 3),
+    ("investing.com", "Investing.com", "news", 2),
+    ("federalregister.gov", "Federal Register", "news", 1),
+    ("engineering.fb.com", "Meta Engineering", "lab", 1),
+    ("minimax.io", "MiniMax", "lab", 1),
+    ("pymnts.com", "PYMNTS", "news", 2),
 )
 
 
