@@ -251,6 +251,58 @@ def rewrite_headline(title: str) -> str:
     return text.rstrip(".")
 
 
+def _shorten_raw_title(title: str) -> str:
+    """A second cut when the first rewrite is still the page title."""
+    words = (title or "").split()
+    cut = list(words)
+    while len(cut) > 3 and headline_is_raw(" ".join(cut), title):
+        cut = cut[:-1]
+    if len(cut) == len(words) and len(cut) > 1:
+        cut = cut[:-1]
+    return " ".join(cut).rstrip(",;:-")
+
+
+def ensure_headline(headline: str, title: str) -> str:
+    """Rewrite once when the lead is the source title or has no ending period.
+
+    If that rewrite is still the raw title, shorten it once more. If the
+    line still has no ending period, append one.
+    """
+    text = (headline or "").strip()
+    raw = headline_is_raw(text, title)
+    missing_period = not text or text[-1] not in ".!?"
+    if not raw and not missing_period:
+        return text
+    retried = rewrite_headline(title or text).strip()
+    if retried and not headline_is_raw(retried, title):
+        text = retried
+    elif raw:
+        text = _shorten_raw_title(title or text).strip()
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def fix_openai_wording(text: str, article: Article) -> str:
+    """OpenAI funding copy says raises. The model sometimes writes offerings."""
+    if not text or not re.search(r"\bofferings\b", text, re.I):
+        return text
+    blob = f"{getattr(article, 'title', '')} {getattr(article, 'source_name', '')}"
+    blob = f"{blob} {_source_text(article)}"
+    if not re.search(r"\bopenai\b", blob, re.I):
+        return text
+
+    def repl(match):
+        word = match.group(0)
+        if word.isupper():
+            return "RAISES"
+        if word[:1].isupper():
+            return "Raises"
+        return "raises"
+
+    return re.sub(r"\bofferings\b", repl, text, flags=re.I)
+
+
 def _definition_why(article: Article) -> str:
     """Say what an unfamiliar product is, using a sentence from the page."""
     source = _source_text(article)
@@ -287,6 +339,27 @@ _DANGLING_END = re.compile(
 )
 
 
+def _insider_agents(article: Article) -> bool:
+    """A security change that treats agents as insiders. Guardian Agents is one."""
+    blob = f"{article.title or ''} {_source_text(article)}"
+    return (
+        re.search(r"\bagents?\b", blob, re.I) is not None
+        and re.search(r"\binsiders?\b", blob, re.I) is not None
+    )
+
+
+def _insider_why(article: Article) -> str:
+    if not _insider_agents(article):
+        return ""
+    source = _source_text(article)
+    if not re.search(r"\bmicrosoft\b", source, re.I):
+        return ""
+    line = "Microsoft treats those agents as insiders."
+    if not line_is_grounded(line, source, analysis=True):
+        return ""
+    return line
+
+
 def _usable_why(why: str, body: str, article: Article) -> str:
     """A consequence, or a definition. Never the selection-bar template."""
     order = _order_why(article)
@@ -310,6 +383,9 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     money = _money_why(article)
     if money and not _restates(money, body) and not is_filler_why(money):
         return money
+    insider = _insider_why(article)
+    if insider and not _restates(insider, body):
+        return insider
     return ""
 
 
@@ -717,7 +793,7 @@ Rules:
 - Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
 - headline: one specific claim, not a version number alone.
 - body: 2 to 3 sentences of concrete facts from that item's text. A body under 2 sentences is invalid. Keep prices, benchmark numbers, dates, and availability. If a benchmark comes from the company that built the model, label it company-reported, or vendor-reported on a vendor post. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million". For an Anthropic loss, if the text says the charges are accounting charges, the why-line says most of the loss is non-cash.
+- why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million".
 - Public information only. No private companies' internal notes, customers, or revenue, and no product pitch.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 - Do not write a generic line such as "it adds new features" unless the text names the features.
@@ -845,7 +921,10 @@ def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth
             why = ""
         what = _fix_gallot_attribution(what, article)
         why = _fix_minimax_why(_fix_gallot_attribution(why, article), article)
-        copies.append((scrub_copy(what), why))
+        what = ensure_headline(scrub_copy(what), article.title)
+        what = fix_openai_wording(what, article)
+        why = fix_openai_wording(why, article)
+        copies.append((what, why))
     return copies
 
 
@@ -997,7 +1076,7 @@ A hard number stays only when it appears in that item's text. Prefer the lab's o
 For each chosen item:
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million". For an Anthropic loss, if the text says the charges are accounting charges, the why-line says most of the loss is non-cash.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million".
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
@@ -1281,11 +1360,49 @@ def _order_pairs(pairs: list) -> list:
     return major + middle + narrow
 
 
+def _extractive_pair(article: Article):
+    """A publishable story from the source, or None when the page cannot carry one."""
+    what, why = extractive_lines(article)
+    headline = _order_lead(article) or rewrite_headline(what or article.title)
+    if headline_is_raw(headline, article.title) or len(headline.split()) > 12:
+        headline = rewrite_headline(article.title)
+    headline = ensure_headline(headline, article.title)
+    headline = fix_openai_wording(scrub_copy(headline), article)
+    body = drop_unjoined_numbers(
+        strip_unverified_expectation(label_benchmark(factual_body(article), article), article),
+        article,
+    )
+    body = fix_openai_wording(body, article)
+    if len(split_sentences(body)) < 2:
+        return None
+    why_line = _usable_why(why, body, article)
+    why_line = fix_openai_wording(why_line or "", article)
+    if not why_line or is_criteria_echo(why_line):
+        return None
+    if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
+        return None
+    return (article, headline, body, why_line)
+
+
+def _open_slot(article: Article) -> bool:
+    """A story that may fill a free slot under the cap. Hard noise may not."""
+    from src.rank import hard_noise, score_article
+    if hard_noise(article):
+        return False
+    if _insider_agents(article) or _government_notice(article):
+        return True
+    if _must_keep(article) or _CLEAR_BAR.search(article.title or ""):
+        return True
+    return score_article(article) >= 6
+
+
 def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
     """Keep a stated mega-round or removal order when the draft skipped it.
 
     The ranker already treats those as the bar. A single sample should not
-    drop one to make room for a second copy of a smaller item.
+    drop one to make room for a second copy of a smaller item. When fewer
+    than `limit` stories survived, a qualifying story such as an insider-agent
+    change fills the open slot instead of being cut.
     """
     from src.dedupe import same_story
     from src.rank import score_article
@@ -1305,24 +1422,31 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
         skipped.append(article)
     skipped.sort(key=score_article, reverse=True)
     for article in skipped:
-        what, why = extractive_lines(article)
-        headline = _order_lead(article) or rewrite_headline(what or article.title)
-        if headline_is_raw(headline, article.title) or len(headline.split()) > 12:
-            headline = rewrite_headline(article.title)
-        body = drop_unjoined_numbers(
-            strip_unverified_expectation(label_benchmark(factual_body(article), article), article),
-            article,
-        )
-        if len(split_sentences(body)) < 2:
-            continue
-        why_line = _usable_why(why, body, article)
-        if not why_line or is_criteria_echo(why_line):
-            continue
-        if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
+        row = _extractive_pair(article)
+        if row is None:
             continue
         if len(pairs) >= limit and not _drop_for_keep(pairs):
             break
-        pairs.append((article, headline, body, why_line))
+        pairs.append(row)
+    if len(pairs) < limit:
+        extras = []
+        for article in articles:
+            if any(same_story(article, row[0]) for row in pairs):
+                continue
+            if not _open_slot(article):
+                continue
+            extras.append(article)
+        extras.sort(
+            key=lambda article: (_insider_agents(article), score_article(article)),
+            reverse=True,
+        )
+        for article in extras:
+            if len(pairs) >= limit:
+                break
+            row = _extractive_pair(article)
+            if row is None:
+                continue
+            pairs.append(row)
     pairs = _order_pairs(pairs)
     while len(pairs) > limit and _drop_for_keep(pairs):
         pass
@@ -1330,16 +1454,25 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
 
 
 def _drop_for_keep(pairs: list) -> bool:
-    """Drop a lesser item. Never drop the lab loss, the Nscale deal, or the chip order."""
-    for index in range(len(pairs) - 1, -1, -1):
-        if _narrow_release(pairs[index][0]):
-            pairs.pop(index)
-            return True
-    for index in range(len(pairs) - 1, -1, -1):
-        if not _must_keep(pairs[index][0]):
-            pairs.pop(index)
-            return True
-    return False
+    """Drop a lesser item. Never drop the lab loss, the Nscale deal, or the chip order.
+
+    An insider-agent story stays while a narrower item can go instead.
+    """
+    from src.rank import score_article
+
+    droppable = [index for index in range(len(pairs)) if not _must_keep(pairs[index][0])]
+    if not droppable:
+        return False
+    ordinary = [index for index in droppable if not _insider_agents(pairs[index][0])]
+    pool = ordinary or droppable
+
+    def key(index):
+        article = pairs[index][0]
+        return (0 if _narrow_release(article) else 1, score_article(article), -index)
+
+    pool.sort(key=key)
+    pairs.pop(pool[0])
+    return True
 
 
 def _not_publishing(exc: BaseException | None = None) -> SchemaError:
@@ -1358,6 +1491,7 @@ def _compose_group(
     require_full_body: bool,
     since,
     until,
+    pool=None,
 ) -> tuple:
     """One ranking call. Raises on failure. An empty list means nothing cleared the bar."""
     prompt = _rank_prompt(articles, recent or [], limit, since=since, until=until)
@@ -1422,6 +1556,10 @@ def _compose_group(
         if headline_is_raw(why, article.title):
             why = _usable_why("", body, article)
         why = _fix_minimax_why(_fix_gallot_attribution(why, article), article)
+        headline = ensure_headline(headline, article.title)
+        headline = fix_openai_wording(headline, article)
+        body = fix_openai_wording(body, article)
+        why = fix_openai_wording(why, article)
         if not why or is_criteria_echo(why) or is_filler_why(why) or headline_is_raw(why, article.title):
             print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
             continue
@@ -1433,7 +1571,7 @@ def _compose_group(
         # The model looked and found nothing worth posting.
         return "", []
 
-    pairs = _backfill_clear_bar(articles, pairs, limit)
+    pairs = _backfill_clear_bar(pool or articles, pairs, limit)
 
     combined = "\n".join(_source_text(row[0]) for row in pairs)
     lede = fit_lede(clean_line(str((payload or {}).get("lede") or ""), limit=420), since, until)
@@ -1442,6 +1580,15 @@ def _compose_group(
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
     if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
         lede = fit_lede(story_lede(pairs), since, until)
+    openai = next(
+        (
+            row[0] for row in pairs
+            if re.search(r"\bopenai\b", f"{row[0].title} {_source_text(row[0])}", re.I)
+        ),
+        None,
+    )
+    if openai is not None:
+        lede = fix_openai_wording(lede, openai)
     return lede, pairs
 
 
@@ -1498,7 +1645,7 @@ def compose_briefing(
         finalists = _rank_finalists(articles, api_key, model, **kwargs)
         if len(articles) > _RANK_BATCH and not finalists:
             return "", []
-        return _compose_group(finalists, api_key, model, **kwargs)
+        return _compose_group(finalists, api_key, model, pool=articles, **kwargs)
     except AuthError:
         if strict_auth:
             raise

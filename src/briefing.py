@@ -148,7 +148,7 @@ def run_briefing(
 
     fresh = discovered.fresh
     unique = discovered.pool
-    limit = int(config.get("max_items", 6))
+    limit = int(config.get("max_items", 7))
     lede = ""
     if config.get("llm_rank"):
         selected = list(discovered.shortlist)

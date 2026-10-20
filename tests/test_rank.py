@@ -81,6 +81,30 @@ def test_office_opening_stays_under_the_bar():
     assert score_article(article("Anthropic opens Singapore office and signs MOU", kind="lab", source="Anthropic")) < 6
 
 
+def test_select_keeps_seven_stories_when_seven_qualify():
+    higher = [
+        article("Gemini 4 Argon: Built to solve your hardest problems", kind="lab", source="Google", url="https://blog.google/g", hours=16),
+        article("Eight US states sue OpenAI, claiming ChatGPT harms children", url="https://www.cnbc.com/suit", source="CNBC", hours=18),
+        article("OpenAI races to raise $30 billion ahead of an IPO", url="https://www.reuters.com/raise", source="Reuters", hours=17),
+        article("U.S. bans DeepSeek from government agency systems", url="https://www.politico.com/ban", source="Politico", hours=15),
+        article("Nscale in talks for a new $45 billion AI cloud deal", url="https://www.bloomberg.com/nscale", source="Bloomberg", hours=14),
+        article("MiniMax M3 ships open weights at a stated price", kind="lab", source="MiniMax", url="https://www.minimax.io/m", hours=13),
+    ]
+    guardian = article(
+        "Microsoft security update treats AI agents as insiders",
+        url="https://techcrunch.com/guardian",
+        source="TechCrunch",
+        hours=12,
+    )
+    items = higher + [guardian]
+    capped = select_items(items, limit=6)
+    assert len(capped) == 6
+    assert all("insiders" not in item.title for item in capped)
+    selected = select_items(items)
+    assert len(selected) == 7
+    assert any("insiders" in item.title for item in selected)
+
+
 def test_select_keeps_material_items_and_drops_noise():
     items = [
         article("Gemini 4 Argon: Built to solve your hardest problems", kind="lab", source="Google", url="https://blog.google/g", hours=16),

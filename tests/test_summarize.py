@@ -387,6 +387,74 @@ def test_a_criteria_echo_is_replaced_with_what_the_product_is():
     assert "kubernetes" in why.lower()
 
 
+def test_a_seventh_qualifying_story_fills_the_open_slot():
+    from src.summarize import _backfill_clear_bar
+    titles = [
+        ("Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports", "https://www.reuters.com/anthropic-loss"),
+        ("Nvidia-backed Nscale, Anthropic in talks for new $45 billion AI cloud deal", "https://www.reuters.com/nscale"),
+        ("ByteDance, Alibaba and Tencent order more than $35 billion of Nvidia chips", "https://www.reuters.com/nvidia"),
+        ("OpenAI races to raise $30 billion ahead of an Anthropic IPO", "https://www.reuters.com/openai-raise"),
+        ("Notice of Order Regarding Exclusion and Removal of DeepSeek Products From Federal Systems", "https://www.federalregister.gov/deepseek"),
+        ("MiniMax M3.1 Flash ships at a published token price", "https://www.minimax.io/m3"),
+    ]
+    pairs = []
+    for title, url in titles:
+        story = _article(title, title, kind="news")
+        story.url = url
+        pairs.append((
+            story,
+            "A rewritten headline.",
+            "One sentence here that is long enough to count as copy. Another sentence here that is also long enough.",
+            "A concrete consequence for this story.",
+        ))
+    guardian = _article(
+        "Microsoft launches Guardian Agents to police AI agents as insiders",
+        "Microsoft launched Guardian Agents to monitor the AI agents a company runs day to day.",
+        kind="news",
+    )
+    guardian.url = "https://techcrunch.com/2026/10/19/microsoft-guardian-agents"
+    guardian.source_name = "TechCrunch"
+    guardian.source_domain = "techcrunch.com"
+    guardian.full_text = (
+        "Microsoft launched Guardian Agents to monitor the AI agents a company runs day to day. "
+        "Defender can detect 60 types of agents employees bring into the workplace."
+    )
+    ranked = _backfill_clear_bar([row[0] for row in pairs] + [guardian], pairs, limit=7)
+    assert len(ranked) == 7
+    assert any("Guardian Agents" in row[0].title for row in ranked)
+
+
+def test_a_raw_title_or_a_missing_period_is_fixed_in_the_headline():
+    from src.summarize import ensure_headline, headline_is_raw
+    title = "OpenAI races to raise $30 billion ahead of Anthropic IPO, sources say"
+    fixed = ensure_headline(title, title)
+    assert fixed.endswith(".")
+    assert not headline_is_raw(fixed, title)
+    bare = "OpenAI races to raise $30 billion"
+    finished = ensure_headline(bare, title)
+    assert finished.endswith(".")
+    assert not headline_is_raw(finished, title)
+    done = "OpenAI races to raise $30 billion."
+    assert ensure_headline(done, title) == done
+
+
+def test_openai_offerings_are_rewritten_as_raises():
+    from src.summarize import fix_openai_wording
+    article = _article(
+        "OpenAI races to raise $30 billion ahead of an Anthropic IPO",
+        "OpenAI is racing to raise about $30 billion.",
+        kind="news",
+    )
+    article.full_text = "OpenAI is racing to raise about $30 billion before an IPO."
+    assert (
+        fix_openai_wording("OpenAI's latest offerings total $30 billion.", article)
+        == "OpenAI's latest raises total $30 billion."
+    )
+    assert fix_openai_wording("Offerings opened the round.", article) == "Raises opened the round."
+    other = _article("A vendor lists product offerings", "The offerings stayed on the page.", kind="news")
+    assert fix_openai_wording("The offerings stayed on the page.", other) == "The offerings stayed on the page."
+
+
 def test_a_raw_page_title_is_rewritten():
     from src.summarize import headline_is_raw, rewrite_headline
     title = "llm-d v1.0: a long page title that should not ship as the headline unchanged"

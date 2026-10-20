@@ -81,6 +81,7 @@ def test_rank_prompt_has_no_together_angle():
     assert "bring it up this week" in prompt
     assert "revenue" in prompt
     assert "worth a look" in prompt
+    assert "most of the loss is non-cash" not in prompt
 
 
 def test_schema_failure_raises_when_a_full_body_is_required(monkeypatch):

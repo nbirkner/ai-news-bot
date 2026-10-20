@@ -150,7 +150,7 @@ def score_article(article) -> int:
 def select_items(
     articles: list,
     *,
-    limit: int = 6,
+    limit: int = 7,
     material_score: int = 6,
     paper_min_score: int = 9,
     max_per_source: int = 2,
