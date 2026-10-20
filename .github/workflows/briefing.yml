@@ -1,0 +1,70 @@
+name: AI briefing
+
+# Slack posting and email sending are off until a newsletter dry run looks right.
+# The schedule returns when that send path is turned on. Until then this
+# workflow only writes ./out and uploads it. main_newsletter.py never sends.
+on:
+  workflow_dispatch:
+    inputs:
+      window_end:
+        description: "Window end date (YYYY-MM-DD). 15:00 UTC that day."
+        type: string
+        default: "2026-10-19"
+      dry_run:
+        description: "Always a dry run. This input does not enable sending."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-briefing
+  cancel-in-progress: false
+
+jobs:
+  newsletter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+
+      - name: Restore briefing state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: briefing-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            briefing-state-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Newsletter dry run
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '30' }}
+          TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}
+          DRY_RUN: "1"
+        run: python main_newsletter.py --dry-run --window-end "${{ inputs.window_end }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: newsletter-out
+          path: out/
+          if-no-files-found: ignore
+
+      # Kept off. A dry run must not refresh the cache as if it had published.
+      - name: Save briefing state
+        if: false
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: briefing-state-${{ github.run_id }}-${{ github.run_attempt }}

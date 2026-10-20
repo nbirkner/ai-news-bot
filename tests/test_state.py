@@ -74,3 +74,18 @@ def test_is_seen_returns_true_for_known_url():
 def test_is_seen_returns_false_for_unknown_url():
     seen = {}
     assert is_seen(seen, "https://example.com/a") is False
+
+
+def test_last_run_round_trip(tmp_path):
+    from src.state import load_last_run, save_last_run
+    path = tmp_path / "nested" / "last.json"
+    assert load_last_run(path) is None
+    moment = datetime(2026, 10, 12, 15, 0, tzinfo=timezone.utc)
+    save_last_run(moment, path)
+    assert load_last_run(path) == moment
+
+
+def test_load_seen_returns_empty_on_corrupt_json(tmp_path):
+    state_file = tmp_path / "seen.json"
+    state_file.write_text("{not json")
+    assert load_seen(state_file) == {}

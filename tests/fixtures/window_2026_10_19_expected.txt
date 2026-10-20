@@ -1,0 +1,9 @@
+# Representative headlines for the Fri 16 Oct 2026 15:00 UTC to Mon 19 Oct window.
+# The dry run of the keyword ranker kept vLLM and SGLang and missed these.
+Anthropic federal bill Politico
+OpenAI agent incidents OpenCode key leak
+Anthropic workforce study Public Benefit Fund
+DeepSeek V4.1-Flash-1017
+Microsoft Nscale Essex Anthropic Nova Scotia
+Tenstorrent $1.5B raise
+OpenAI Anthropic agent tool launches

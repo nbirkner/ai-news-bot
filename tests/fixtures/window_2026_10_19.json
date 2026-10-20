@@ -1,0 +1,145 @@
+[
+  {
+    "title": "Anthropic quietly pitches its own AI safety bill to lawmakers",
+    "url": "https://www.politico.com/news/2026/10/17/anthropic-ai-safety-bill",
+    "source_name": "Politico",
+    "source_domain": "politico.com",
+    "source_kind": "news",
+    "source_priority": 2,
+    "published_at": "2026-10-17T14:00:00+00:00",
+    "content_preview": "Anthropic is asking lawmakers to take up an AI safety bill.",
+    "full_text": "Anthropic is circulating a federal AI safety bill with lawmakers. The company says the draft is its own proposal, not a committee text."
+  },
+  {
+    "title": "OpenAI reports four more agent incidents after the OpenCode key leak",
+    "url": "https://www.theverge.com/2026/10/18/openai-agent-incidents-opencode",
+    "source_name": "The Verge",
+    "source_domain": "theverge.com",
+    "source_kind": "news",
+    "source_priority": 3,
+    "published_at": "2026-10-18T16:00:00+00:00",
+    "content_preview": "OpenAI says four more agent incidents followed the OpenCode key leak.",
+    "full_text": "OpenAI said four more agent incidents followed the OpenCode key leak. The company said the leaked key was rotated."
+  },
+  {
+    "title": "Anthropic publishes a workforce study and a Public Benefit Fund",
+    "url": "https://www.anthropic.com/news/public-benefit-fund",
+    "source_name": "Anthropic",
+    "source_domain": "anthropic.com",
+    "source_kind": "lab",
+    "source_priority": 1,
+    "published_at": "2026-10-17T18:00:00+00:00",
+    "content_preview": "Anthropic published a workforce study and a Public Benefit Fund.",
+    "full_text": "Anthropic published a workforce study and announced a Public Benefit Fund. The post does not name an audited dollar figure."
+  },
+  {
+    "title": "DeepSeek-V4.1-Flash-1017",
+    "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "source_name": "DeepSeek",
+    "source_domain": "huggingface.co",
+    "source_kind": "lab",
+    "source_priority": 1,
+    "published_at": "2026-10-17T02:40:38+00:00",
+    "content_preview": "DeepSeek-V4.1-Flash-1017 on Hugging Face.",
+    "full_text": "DeepSeek released DeepSeek-V4.1-Flash-1017 on 2026-10-17. The weights are open weights on Hugging Face. Company-reported evaluations are preliminary."
+  },
+  {
+    "title": "Microsoft drops the Nscale data center plan in Essex as Anthropic expands in Nova Scotia",
+    "url": "https://www.cnbc.com/2026/10/18/microsoft-nscale-essex-anthropic-nova-scotia.html",
+    "source_name": "CNBC",
+    "source_domain": "cnbc.com",
+    "source_kind": "news",
+    "source_priority": 2,
+    "published_at": "2026-10-18T12:00:00+00:00",
+    "content_preview": "Microsoft dropped a Nscale data center plan in Essex.",
+    "full_text": "Microsoft dropped the Nscale data center plan in Essex. Anthropic is expanding a site in Nova Scotia. The story is about grid power for training clusters."
+  },
+  {
+    "title": "Tenstorrent raises $1.5 billion to build AI chips",
+    "url": "https://techcrunch.com/2026/10/17/tenstorrent-raises-1-5-billion/",
+    "source_name": "TechCrunch",
+    "source_domain": "techcrunch.com",
+    "source_kind": "news",
+    "source_priority": 2,
+    "published_at": "2026-10-17T20:00:00+00:00",
+    "content_preview": "Tenstorrent raised $1.5 billion.",
+    "full_text": "Tenstorrent raises $1.5 billion to build AI chips. The company said the round values it at a figure it did not break out as independently audited."
+  },
+  {
+    "title": "OpenAI and Anthropic ship new agent tools for developers",
+    "url": "https://openai.com/news/agent-tools",
+    "source_name": "OpenAI",
+    "source_domain": "openai.com",
+    "source_kind": "lab",
+    "source_priority": 1,
+    "published_at": "2026-10-18T15:00:00+00:00",
+    "content_preview": "OpenAI and Anthropic shipped new agent tools.",
+    "full_text": "OpenAI and Anthropic shipped new agent tools for developers. Both tools are available through their APIs."
+  },
+  {
+    "title": "vLLM v0.32.0",
+    "url": "https://github.com/vllm-project/vllm/releases/tag/v0.32.0",
+    "source_name": "vLLM",
+    "source_domain": "github.com",
+    "source_kind": "release",
+    "source_priority": 2,
+    "published_at": "2026-10-17T09:00:00+00:00",
+    "content_preview": "vLLM v0.32.0",
+    "full_text": "vLLM v0.32.0. This release adds new features and parsers."
+  },
+  {
+    "title": "SGLang v0.5.22",
+    "url": "https://github.com/sgl-project/sglang/releases/tag/v0.5.22",
+    "source_name": "SGLang",
+    "source_domain": "github.com",
+    "source_kind": "release",
+    "source_priority": 2,
+    "published_at": "2026-10-17T11:00:00+00:00",
+    "content_preview": "SGLang v0.5.22",
+    "full_text": "SGLang v0.5.22. It includes new models and improvements."
+  },
+  {
+    "title": "AI agents are hacking John Deere equipment",
+    "url": "https://www.theverge.com/2026/10/18/john-deere-agents",
+    "source_name": "The Verge",
+    "source_domain": "theverge.com",
+    "source_kind": "news",
+    "source_priority": 3,
+    "published_at": "2026-10-18T13:00:00+00:00",
+    "content_preview": "AI agents are hacking John Deere equipment.",
+    "full_text": "Researchers showed AI agents hacking John Deere equipment by driving the vendor's own support tools."
+  },
+  {
+    "title": "Websites start blocking AI agents",
+    "url": "https://www.theverge.com/2026/10/18/sites-blocking-agents",
+    "source_name": "The Verge",
+    "source_domain": "theverge.com",
+    "source_kind": "news",
+    "source_priority": 3,
+    "published_at": "2026-10-18T14:00:00+00:00",
+    "content_preview": "Websites start blocking AI agents.",
+    "full_text": "Major websites started blocking AI agents after a week of automated traffic."
+  },
+  {
+    "title": "Amazon expands its in-house AI chip program",
+    "url": "https://www.reuters.com/technology/amazon-ai-chip-2026-10-18/",
+    "source_name": "Reuters",
+    "source_domain": "reuters.com",
+    "source_kind": "news",
+    "source_priority": 2,
+    "published_at": "2026-10-18T17:00:00+00:00",
+    "content_preview": "Amazon expands its in-house AI chip program.",
+    "full_text": "Amazon expands its in-house AI chip program for training and inference."
+  },
+  {
+    "title": "SentinelOne cuts malware analysis from weeks to hours",
+    "url": "https://openai.com/customer/sentinelone",
+    "source_name": "OpenAI",
+    "source_domain": "openai.com",
+    "source_kind": "lab",
+    "source_priority": 1,
+    "published_at": "2026-10-17T08:00:00+00:00",
+    "content_preview": "A customer story.",
+    "full_text": "SentinelOne cuts malware analysis from weeks to hours with a custom assistant."
+  }
+]
