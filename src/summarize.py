@@ -386,6 +386,442 @@ def _money_why(article: Article) -> str:
     return ""
 
 
+# The first of these in the title is the story's lead. A Nscale why must say
+# Nscale, even when the title also says Nvidia.
+_LEAD_NAMES = (
+    "nscale", "minimax", "guardian", "bytedance", "deepseek",
+    "anthropic", "openai", "microsoft", "nvidia", "alibaba", "tencent",
+)
+_GARBLED_WHY = re.compile(
+    r"^(?:since|because|although|which|that)\b|"
+    r"\bsince the scores are company-reported\b",
+    re.I,
+)
+_SPEAKER_VERB = r"(?:said|wrote|told|warned|called|added|noted)"
+_QUOTE_SPAN = re.compile(r'["“]([^"”]{8,})["”]')
+_ATTR_FORWARD = re.compile(
+    rf"\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+{_SPEAKER_VERB}\b([^.]*)",
+)
+_ATTR_BACK = re.compile(
+    rf'["“]([^"”]{{8,}})["”]\s*,?\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+{_SPEAKER_VERB}\b',
+)
+
+
+def _reject(article, reason: str, rejected=None) -> None:
+    """Say why a candidate did not ship. The reason is the whole point of the log."""
+    title = getattr(article, "title", "") or "(no title)"
+    print(f"Rejected candidate ({reason}): {title}", file=sys.stderr)
+    if rejected is not None and getattr(article, "url", ""):
+        rejected.add(article.url)
+
+
+def _garbled_why(why: str) -> bool:
+    return bool(_GARBLED_WHY.search((why or "").strip()))
+
+
+def story_lead(article: Article) -> str:
+    """The company this headline is about.
+
+    A deal name such as Nscale wins over Nvidia when the title says
+    Nvidia-backed Nscale. Otherwise the earliest name is the subject,
+    so an OpenAI raise that mentions an Anthropic IPO stays an OpenAI story.
+    """
+    title = getattr(article, "title", "") or ""
+    hits = []
+    for name in _LEAD_NAMES:
+        match = re.search(rf"\b{name}\b", title, re.I)
+        if match:
+            hits.append((match.start(), name))
+    if not hits:
+        return ""
+    preferred = {"nscale", "minimax", "guardian", "bytedance", "deepseek"}
+    for _start, name in hits:
+        if name in preferred:
+            return name
+    return min(hits)[1]
+
+
+def _entities_in(text: str) -> set:
+    low = (text or "").lower()
+    return {name for name in _LEAD_NAMES if re.search(rf"\b{name}\b", low)}
+
+
+def _same_article(left: Article, right: Article) -> bool:
+    if left is right:
+        return True
+    return bool(getattr(left, "url", "") and left.url == getattr(right, "url", ""))
+
+
+def why_mismatch_reason(why: str, article: Article, siblings=None) -> str:
+    """Empty when the why belongs to this story. Otherwise a short reason."""
+    text = why or ""
+    if not text.strip():
+        return "empty"
+    if _garbled_why(text):
+        return "garbled fragment"
+    lead = story_lead(article)
+    named = _entities_in(text)
+    if lead and lead not in named:
+        return f"does not name {lead}"
+    own = _entities_in(f"{article.title or ''} {_source_text(article)}")
+    for sibling in siblings or []:
+        if _same_article(sibling, article):
+            continue
+        foreign = named & (_entities_in(getattr(sibling, "title", "") or "") - own)
+        if foreign:
+            return "names " + ", ".join(sorted(foreign))
+    return ""
+
+
+def why_matches_story(why: str, article: Article, siblings=None) -> bool:
+    return why_mismatch_reason(why, article, siblings) == ""
+
+
+def _same_speaker(claimed: str, actual: str) -> bool:
+    claimed_words = {word.lower() for word in (claimed or "").split() if len(word) > 2}
+    actual_words = {word.lower() for word in (actual or "").split() if len(word) > 2}
+    return bool(claimed_words & actual_words)
+
+
+def _speaker_near(source: str, start: int, end: int) -> str:
+    before = source[max(0, start - 500):start]
+    after = source[end:end + 180]
+    named = list(re.finditer(
+        rf"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+{_SPEAKER_VERB}\b",
+        before,
+    ))
+    if named:
+        return named[-1].group(1)
+    if re.search(rf"\b(?:she|he)\s+{_SPEAKER_VERB}\b", before[-140:]) or re.search(
+        rf"^\s*,?\s*(?:she|he)\s+{_SPEAKER_VERB}\b",
+        after,
+    ):
+        people = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", before)
+        if people:
+            return people[-1]
+    return ""
+
+
+def _source_quotes(source: str) -> list:
+    quotes = []
+    for match in _QUOTE_SPAN.finditer(source or ""):
+        quotes.append((
+            _speaker_near(source, match.start(), match.end()),
+            match.group(1),
+        ))
+    return quotes
+
+
+def _flat_quote(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _quote_belongs_to(quote: str, speaker: str, source_quotes: list) -> bool:
+    folded = _flat_quote(quote)
+    if len(folded) < 8:
+        return False
+    for actual, text in source_quotes:
+        hay = _flat_quote(text)
+        if (folded in hay or hay in folded) and _same_speaker(speaker, actual):
+            return True
+    return False
+
+
+def _named_person(speaker: str, source: str) -> bool:
+    """A person, not a company reporting its own numbers."""
+    speaker = (speaker or "").strip()
+    if not speaker:
+        return False
+    if len(speaker.split()) >= 2:
+        return True
+    return re.search(rf"\b[A-Z][a-z]+\s+{re.escape(speaker)}\b", source or "") is not None
+
+
+def sentence_misattributes(sentence: str, source: str) -> bool:
+    """True when a sentence gives a person a quote the source does not give them."""
+    if not sentence or not source:
+        return False
+    quotes = _source_quotes(source)
+    seen = set()
+    attributions = []
+    for match in _ATTR_FORWARD.finditer(sentence):
+        attributions.append((match.group(1), match.group(2)))
+    for match in _ATTR_BACK.finditer(sentence):
+        attributions.append((match.group(2), match.group(1)))
+    for speaker, rest in attributions:
+        if not _named_person(speaker, source):
+            continue
+        quoted = _QUOTE_SPAN.findall(rest if isinstance(rest, str) else "")
+        if not quoted and rest.strip().startswith('"'):
+            quoted = _QUOTE_SPAN.findall(rest)
+        if quoted:
+            for quote in quoted:
+                key = (speaker, quote)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not _quote_belongs_to(quote, speaker, quotes):
+                    return True
+            continue
+        words = re.findall(r"[A-Za-z0-9']+", rest)
+        for index in range(0, max(0, len(words) - 5)):
+            chunk = " ".join(words[index:index + 6]).lower()
+            if chunk not in source.lower():
+                continue
+            if not _quote_belongs_to(chunk, speaker, quotes):
+                return True
+    return False
+
+
+def _deattribute(sentence: str) -> str:
+    text = re.sub(
+        rf"\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+{_SPEAKER_VERB}\s+that\s+",
+        "",
+        sentence,
+        count=1,
+    )
+    text = re.sub(r'["“”]', "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def fix_quote_attribution(text: str, source: str) -> str:
+    """Drop or un-attribute a line that puts a reporter's words in someone's mouth."""
+    kept = []
+    for sentence in split_sentences(text or ""):
+        if not sentence_misattributes(sentence, source):
+            kept.append(sentence)
+            continue
+        stripped = _deattribute(sentence)
+        if (
+            stripped
+            and stripped != sentence
+            and not sentence_misattributes(stripped, source)
+            and line_is_grounded(stripped, source, analysis=True)
+        ):
+            kept.append(stripped)
+    return " ".join(kept)
+
+
+def _token_prices(source: str) -> list:
+    prices = []
+    for match in re.finditer(r"\$\s?(\d+(?:\.\d+)?)", source or ""):
+        window = source[max(0, match.start() - 60):match.end() + 60].lower()
+        if re.search(r"token|per\s+1\s*m|/\s*m\b|million", window):
+            prices.append(float(match.group(1)))
+    return prices
+
+
+def price_unit_mismatch(text: str, source: str) -> bool:
+    """'cents per million' does not describe a price the source states as $0.10 or more."""
+    if not re.search(r"\bcents?\s+per\s+million\b", text or "", re.I):
+        return False
+    return any(price >= 0.10 for price in _token_prices(source))
+
+
+def fix_price_units(text: str, source: str) -> str:
+    """Say under a dollar when that is what the source price is. Drop an unstated frontier-lab label."""
+    updated = text or ""
+    if price_unit_mismatch(updated, source):
+        prices = _token_prices(source)
+        if prices and all(0 < price < 1 for price in prices):
+            replacement = "under a dollar per million tokens"
+        else:
+            replacement = "per million tokens"
+        updated = re.sub(
+            r"\bcents?\s+per\s+million(?:\s+tokens)?\b",
+            replacement,
+            updated,
+            flags=re.I,
+        )
+    if re.search(r"frontier-lab model", updated, re.I) and not re.search(
+        r"frontier[-\s]lab", source or "", re.I
+    ):
+        updated = re.sub(r"\bfrontier-lab model\b", "model", updated, flags=re.I)
+    return re.sub(r"\s{2,}", " ", updated).strip()
+
+
+def _prefix_minimax_says(sentence: str) -> str:
+    stripped = (sentence or "").rstrip(".")
+    if stripped and stripped[0].isupper():
+        stripped = stripped[0].lower() + stripped[1:]
+    return f"MiniMax says {stripped}."
+
+
+def _minimax_claim(sentence: str) -> bool:
+    if re.search(r"\b3\s?x\b", sentence or "", re.I) or re.search(r"70\s?%", sentence or ""):
+        return True
+    return bool(_token_prices(sentence or ""))
+
+
+def _fit_sentences(text: str, prefer, limit: int = 3) -> str:
+    sentences = split_sentences(text)
+    if len(sentences) <= limit:
+        return " ".join(sentences)
+    required = []
+    for index, sentence in enumerate(sentences):
+        if index == 0 or prefer(sentence):
+            required.append(index)
+    chosen = required[:limit]
+    for index in range(len(sentences)):
+        if len(chosen) >= limit:
+            break
+        if index not in chosen:
+            chosen.append(index)
+    return " ".join(sentences[index] for index in sorted(set(chosen))[:limit])
+
+
+def keep_minimax_says(body: str, article: Article) -> str:
+    """Keep MiniMax's attribution, and put a source price back into the body."""
+    source = _source_text(article)
+    if not re.search(r"\bminimax\b", f"{article.title or ''} {source}", re.I):
+        return body
+    text = body or ""
+    says = re.search(r"\bMiniMax says\b", source, re.I) is not None
+    if says:
+        out = []
+        for sentence in split_sentences(text):
+            if _minimax_claim(sentence) and not re.search(r"\bMiniMax says\b", sentence, re.I):
+                prefixed = _prefix_minimax_says(sentence)
+                if line_is_grounded(prefixed, source, analysis=True):
+                    out.append(prefixed)
+                    continue
+            out.append(sentence)
+        text = " ".join(out)
+    if _token_prices(source):
+        have = {
+            price for price in _token_prices(source)
+            if any(abs(price - seen) < 1e-9 for seen in _token_prices(text))
+        }
+        if len(have) < len(set(_token_prices(source))):
+            for sentence in split_sentences(source):
+                if not _token_prices(sentence):
+                    continue
+                cleaned = clean_line(sentence, limit=420)
+                if not cleaned or not line_is_grounded(cleaned, source, analysis=False):
+                    continue
+                if says and not re.search(r"\bMiniMax says\b", cleaned, re.I):
+                    prefixed = _prefix_minimax_says(cleaned)
+                    cleaned = prefixed if line_is_grounded(prefixed, source, analysis=True) else cleaned
+                text = f"{text} {cleaned}".strip()
+                break
+    if says and not re.search(r"\bMiniMax says\b", text, re.I):
+        for sentence in split_sentences(source):
+            if not re.search(r"\bMiniMax says\b", sentence, re.I):
+                continue
+            cleaned = clean_line(sentence, limit=420)
+            if cleaned and line_is_grounded(cleaned, source, analysis=False):
+                text = f"{text} {cleaned}".strip()
+                break
+    return _fit_sentences(text, lambda sentence: _minimax_claim(sentence) or "MiniMax says" in sentence)
+
+
+def _minimax_why(article: Article) -> str:
+    source = _source_text(article)
+    if not re.search(r"\bminimax\b", source, re.I):
+        return ""
+    prices = [price for price in _token_prices(source) if price > 0]
+    under = bool(prices) and all(price < 1 for price in prices)
+    scored = re.search(r"\b(benchmark|score|evaluat)", source, re.I) is not None
+    if scored and under:
+        line = (
+            "MiniMax's benchmark scores are company-reported, "
+            "and the token price is under a dollar per million tokens."
+        )
+    elif scored:
+        line = "MiniMax's benchmark scores are company-reported."
+    elif under:
+        line = "MiniMax's token price is under a dollar per million tokens."
+    else:
+        return ""
+    if not line_is_grounded(line, source, analysis=True):
+        return ""
+    return line
+
+
+def _lead_sentence(article: Article) -> str:
+    lead = story_lead(article)
+    source = _source_text(article)
+    if not lead:
+        return ""
+    for sentence in split_sentences(source):
+        if not re.search(rf"\b{lead}\b", sentence, re.I):
+            continue
+        cleaned = clean_line(sentence, limit=240)
+        if not cleaned or is_criteria_echo(cleaned) or is_filler_why(cleaned):
+            continue
+        if headline_is_raw(cleaned, article.title):
+            continue
+        if line_is_grounded(cleaned, source, analysis=True) and not why_mismatch_reason(cleaned, article, None):
+            return cleaned
+    return ""
+
+
+def _story_why(article: Article) -> str:
+    """A why built from this story. The Nvidia chip line is not reused for Nscale."""
+    title = article.title or ""
+    source = _source_text(article)
+    if re.search(r"\bminimax\b", title, re.I):
+        line = _minimax_why(article)
+        if line:
+            return line
+    if re.search(r"\bguardian\b", f"{title} {source}", re.I):
+        line = "Guardian Agents change which agents a company has to watch."
+        if line_is_grounded(line, source, analysis=True):
+            return line
+    if re.search(r"\bnscale\b", title, re.I):
+        line = "The Nscale deal changes how much compute Anthropic can buy."
+        if line_is_grounded(line, source, analysis=True):
+            return line
+    if re.search(r"\bopenai\b", title, re.I) and re.search(r"\b(raise|fundraising|ipo|\$)\b", title, re.I):
+        line = "The round changes how much compute OpenAI can buy."
+        if line_is_grounded(line, source, analysis=True):
+            return line
+    order = _order_why(article)
+    if order and not why_mismatch_reason(order, article, None):
+        return order
+    chips = _chip_order_why(article)
+    if chips and not why_mismatch_reason(chips, article, None):
+        return chips
+    charge = _loss_charge_why(article)
+    if charge and not why_mismatch_reason(charge, article, None):
+        return charge
+    if re.search(r"\banthropic\b", title, re.I) and re.search(r"\bloss\b", title, re.I):
+        line = "Anthropic's reported loss changes what the lab can spend."
+        if line_is_grounded(line, source, analysis=True):
+            return line
+    return ""
+
+
+def _bind_why(why: str, body: str, article: Article, siblings=None) -> str:
+    """A why that names another story is rewritten. The story is not dropped."""
+    del body  # the rewrite is taken from this article, not from the body
+    if not (why or "").strip():
+        local = _story_why(article)
+        if local and not why_mismatch_reason(local, article, siblings):
+            print(f"Rewriting why (empty): {article.title}", file=sys.stderr)
+            return local
+        return ""
+    reason = why_mismatch_reason(why, article, siblings)
+    if not reason:
+        return why
+    print(f"Rewriting why ({reason}): {article.title}", file=sys.stderr)
+    local = _story_why(article)
+    if local and not why_mismatch_reason(local, article, siblings) and not headline_is_raw(local, article.title):
+        return local
+    sentence = _lead_sentence(article)
+    if sentence and not why_mismatch_reason(sentence, article, siblings):
+        return sentence
+    # A failed rewrite keeps the story. The original line is still a why.
+    if not headline_is_raw(why, article.title):
+        return why
+    return local or sentence or why
+
+
 _MONEY_AMOUNT = re.compile(
     r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:billion|million|bln|bn))?",
     re.I,
@@ -1217,7 +1653,7 @@ def _order_pairs(pairs: list) -> list:
     return major + middle + narrow
 
 
-def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
+def _backfill_clear_bar(articles: list, pairs: list, limit: int, rejected=None) -> list:
     """Keep a stated mega-round or removal order when the draft skipped it.
 
     The ranker already treats those as the bar. A single sample should not
@@ -1250,29 +1686,39 @@ def _backfill_clear_bar(articles: list, pairs: list, limit: int) -> list:
             article,
         )
         if len(split_sentences(body)) < 2:
+            _reject(article, "backfill body has fewer than 2 sentences", rejected)
             continue
+        source = _source_text(article)
+        body = fix_quote_attribution(fix_price_units(body, source), source)
+        body = keep_minimax_says(body, article)
         why_line = _usable_why(why, body, article)
-        if not why_line or is_criteria_echo(why_line):
+        why_line = _bind_why(why_line, body, article, articles)
+        if not why_line or is_criteria_echo(why_line) or is_filler_why(why_line):
+            _reject(article, "backfill why is empty or a slogan", rejected)
             continue
-        if not line_is_grounded(why_line, _source_text(article), analysis=True) and why_line != _order_why(article):
+        if not line_is_grounded(why_line, source, analysis=True) and why_line != _order_why(article):
+            _reject(article, "backfill why is not grounded", rejected)
             continue
-        if len(pairs) >= limit and not _drop_for_keep(pairs):
+        if len(pairs) >= limit and not _drop_for_keep(pairs, rejected):
+            _reject(article, "no room left in the issue", rejected)
             break
         pairs.append((article, headline, body, why_line))
     pairs = _order_pairs(pairs)
-    while len(pairs) > limit and _drop_for_keep(pairs):
+    while len(pairs) > limit and _drop_for_keep(pairs, rejected):
         pass
     return pairs
 
 
-def _drop_for_keep(pairs: list) -> bool:
+def _drop_for_keep(pairs: list, rejected=None) -> bool:
     """Drop a lesser item. Never drop the lab loss, the Nscale deal, or the chip order."""
     for index in range(len(pairs) - 1, -1, -1):
         if _narrow_release(pairs[index][0]):
+            _reject(pairs[index][0], "narrow release removed to make room", rejected)
             pairs.pop(index)
             return True
     for index in range(len(pairs) - 1, -1, -1):
         if not _must_keep(pairs[index][0]):
+            _reject(pairs[index][0], "removed to make room for a higher-priority story", rejected)
             pairs.pop(index)
             return True
     return False
@@ -1307,11 +1753,21 @@ def _compose_group(
 
     pairs = []
     seen = set()
+    rejected = set()
+    stopped = False
     for row in rows:
+        if stopped:
+            if isinstance(row, dict) and isinstance(row.get("index"), int):
+                index = row["index"]
+                if 0 <= index < len(articles):
+                    _reject(articles[index], "past the item limit", rejected)
+            continue
         if not isinstance(row, dict) or not isinstance(row.get("index"), int):
+            print("Rejected candidate (item is not an indexed object)", file=sys.stderr)
             continue
         index = row["index"]
         if index in seen or index < 0 or index >= len(articles):
+            print(f"Rejected candidate (bad index {index})", file=sys.stderr)
             continue
         seen.add(index)
         article = articles[index]
@@ -1348,26 +1804,49 @@ def _compose_group(
         ))
         body = _DETAILS_LEAK.split(body)[0].strip()
         why = _DETAILS_LEAK.split(why)[0].strip()
+        source = _source_text(article)
+        body = fix_quote_attribution(fix_price_units(body, source), source)
+        why = fix_quote_attribution(fix_price_units(why, source), source)
+        body = keep_minimax_says(body, article)
         body = _drop_repeated_why(body, why)
         if _CHROME.search(body) or _CHROME.search(headline):
-            print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
+            _reject(article, "page chrome in the copy", rejected)
             continue
         # A category slogan is not a why-line, including the extractive template.
         why = _usable_why(why, body, article)
         if headline_is_raw(why, article.title):
             why = _usable_why("", body, article)
+        # A why for another story is rewritten. That mismatch does not drop the item.
+        why = _bind_why(why, body, article, articles)
+        body = _drop_repeated_why(body, why)
         if not why or is_criteria_echo(why) or is_filler_why(why) or headline_is_raw(why, article.title):
-            print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
+            if not why:
+                reason = "no usable why"
+            elif is_criteria_echo(why):
+                reason = "why echoes the selection criteria"
+            elif is_filler_why(why):
+                reason = "why is a category slogan"
+            else:
+                reason = "why is the raw page title"
+            _reject(article, reason, rejected)
             continue
         pairs.append((article, headline, body, why))
         if len(pairs) >= limit:
-            break
+            stopped = True
 
     if not pairs:
+        for article in articles:
+            if article.url not in rejected:
+                _reject(article, "not returned by the ranker", rejected)
         # The model looked and found nothing worth posting.
         return "", []
 
-    pairs = _backfill_clear_bar(articles, pairs, limit)
+    pairs = _backfill_clear_bar(articles, pairs, limit, rejected)
+    published = {row[0].url for row in pairs}
+    for article in articles:
+        if article.url in published or article.url in rejected:
+            continue
+        _reject(article, "not returned by the ranker", rejected)
 
     combined = "\n".join(_source_text(row[0]) for row in pairs)
     lede = fit_lede(clean_line(str((payload or {}).get("lede") or ""), limit=420), since, until)
