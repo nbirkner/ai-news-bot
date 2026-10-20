@@ -506,6 +506,106 @@ def test_a_loss_why_names_charges_only_when_the_source_does():
     plain_why = _usable_why("", plain.full_text, plain)
     assert "non-cash" not in (plain_why or "").lower()
     assert "accounting charges" not in (plain_why or "").lower()
+    rich = _article(
+        "Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    rich.full_text = (
+        "Anthropic logged a net loss of more than $80 billion in the first half. "
+        "Most of the $72 billion is non-cash accounting charges. "
+        "The figure to watch is operating burn in the S-1."
+    )
+    rich_why = _usable_why(
+        "Anthropic's reported loss changes what the lab can spend.",
+        rich.full_text,
+        rich,
+    )
+    assert "changes what the lab can spend" not in rich_why.lower()
+    assert rich_why.lower().startswith("most of the $72 billion")
+    assert "non-cash accounting charges" in rich_why.lower()
+    assert "operating burn in the s-1" in rich_why.lower()
+    wire = _article(
+        "Anthropic logged net loss of over $80 billion in first half of 2026, WSJ reports",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    wire.full_text = (
+        "Anthropic recorded a net loss of more than $80 billion in the first half, "
+        "including $72 billion in accounting charges. "
+        "The vast majority of this year's net loss, $72 billion, resulted from accounting charges."
+    )
+    wire_why = _usable_why("Anthropic's reported loss changes what the lab can spend.", wire.full_text, wire)
+    assert "changes what the lab can spend" not in wire_why.lower()
+    assert "$72 billion" in wire_why
+    assert "accounting charges" in wire_why.lower()
+    assert "non-cash" not in wire_why.lower()
+    assert "s-1" not in wire_why.lower()
+    assert "operating burn" not in wire_why.lower()
+
+
+def test_a_quote_is_attributed_only_to_the_person_who_said_it():
+    from src.summarize import fix_quote_attribution, sentence_misattributes
+    source = (
+        "Microsoft security chief Hayete Gallot was even more straightforward. "
+        '"Unfortunately, frontier models, regardless of their origin, cannot be trusted," she wrote. '
+        "On top of that, they are often given the keys to the kingdom, with access to data and tools that could do serious harm."
+    )
+    bad = 'Gallot wrote that agents are "often given access to data and tools that could do serious harm."'
+    assert sentence_misattributes(bad, source)
+    fixed = fix_quote_attribution(bad, source)
+    assert not re.search(r"Gallot.{0,80}serious harm", fixed)
+    good = 'Gallot wrote, "Unfortunately, frontier models, regardless of their origin, cannot be trusted."'
+    assert not sentence_misattributes(good, source)
+    kept = fix_quote_attribution(good, source)
+    assert "Gallot" in kept
+    assert "cannot be trusted" in kept
+
+
+def test_a_dollar_price_is_not_called_cents_per_million():
+    from src.summarize import fix_price_units, price_unit_mismatch
+    source = "Flat pricing per 1M tokens: $0.15 input and $0.60 output."
+    why = "This frontier-lab model costs cents per million tokens."
+    assert price_unit_mismatch(why, source)
+    fixed = fix_price_units(why, source)
+    assert "cents" not in fixed.lower()
+    assert "frontier-lab" not in fixed.lower()
+    assert "under a dollar per million tokens" in fixed.lower()
+    cheap_source = "Cached input is $0.02 per million tokens."
+    cheap = "The cached price is 2 cents per million tokens."
+    assert not price_unit_mismatch(cheap, cheap_source)
+    assert "cents" in fix_price_units(cheap, cheap_source).lower()
+
+
+def test_the_lede_names_stories_in_rank_order():
+    from src.summarize import lede_follows_rank, story_lede
+    loss = _article(
+        "Anthropic logged net loss of over $80 billion",
+        "Anthropic logged a net loss.",
+        kind="news",
+    )
+    nscale = _article(
+        "Nscale and Anthropic in talks for a $45 billion deal",
+        "Nscale and Anthropic are in talks.",
+        kind="news",
+    )
+    deep = _article(
+        "Federal agencies must remove DeepSeek from civilian systems",
+        "The order removes DeepSeek.",
+        kind="news",
+    )
+    rows = [
+        (loss, "Anthropic logged net loss of over $80 billion", "", ""),
+        (nscale, "Nscale and Anthropic in talks for a $45 billion deal", "", ""),
+        (deep, "Federal agencies must remove DeepSeek from civilian systems", "", ""),
+    ]
+    named = story_lede(rows)
+    assert lede_follows_rank(named, rows)
+    swapped = (
+        "The top stories are an order removing DeepSeek, the Nscale deal, "
+        "and Anthropic's reported $80 billion loss."
+    )
+    assert not lede_follows_rank(swapped, rows)
 
 
 def test_nvidia_china_orders_stay_with_anthropic_and_nscale():

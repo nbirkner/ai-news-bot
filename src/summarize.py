@@ -297,10 +297,12 @@ def _usable_why(why: str, body: str, article: Article) -> str:
         candidate = ""
     if is_criteria_echo(candidate) or is_filler_why(candidate) or _SHORTFALL_WHY.search(candidate):
         candidate = "" if _SHORTFALL_WHY.search(candidate) else _concrete_remainder(candidate)
+    if _GENERIC_LOSS_WHY.search(candidate or ""):
+        candidate = ""
     echoed = not candidate or is_criteria_echo(candidate) or is_filler_why(candidate)
     charge = _loss_charge_why(article)
     # The charge fact is the why, even when the body already quotes it.
-    if charge and not re.search(r"non-?cash|accounting charges", candidate or "", re.I):
+    if charge:
         return charge
     if candidate and not echoed and not _restates(candidate, body) and not _DANGLING_END.search(candidate):
         return candidate
@@ -313,32 +315,59 @@ def _usable_why(why: str, body: str, article: Article) -> str:
     return ""
 
 
+_GENERIC_LOSS_WHY = re.compile(r"changes what the lab can spend", re.I)
+_CHARGE_ANCHOR = re.compile(r"non[-\s]?cash|accounting charges?", re.I)
+_BILLION_FIGURE = re.compile(r"\$\s?\d[\d.]*\s?billion", re.I)
+
+
+def _charge_figure(source: str) -> str:
+    """The dollar figure next to the charge, not a different number in the same piece."""
+    anchors = [match.start() for match in _CHARGE_ANCHOR.finditer(source or "")]
+    best = ""
+    best_dist = 10**9
+    for match in _BILLION_FIGURE.finditer(source or ""):
+        for anchor in anchors:
+            dist = abs(match.start() - anchor)
+            if dist <= 120 and dist < best_dist:
+                best_dist = dist
+                best = re.sub(r"\s+", " ", match.group(0)).strip()
+    return best
+
+
 def _loss_charge_why(article: Article) -> str:
-    """Name the charges behind a loss, and only with words the source uses."""
+    """Build the loss why from charge facts the source actually states."""
     source = _source_text(article)
     if not re.search(r"\banthropic\b", source, re.I) or not re.search(r"\bloss\b", source, re.I):
         return ""
-    if re.search(r"non-?cash", source, re.I):
-        kind = "non-cash charges"
-    elif re.search(r"accounting charges", source, re.I):
-        kind = "accounting charges"
-    else:
+    noncash = re.search(r"non[-\s]?cash", source, re.I) is not None
+    accounting = re.search(r"accounting charges?", source, re.I) is not None
+    if not noncash and not accounting:
         return ""
-    says_most = re.search(r"\b(most|mostly)\b", source, re.I)
-    if says_most and kind == "non-cash charges":
-        line = "Most of Anthropic's reported loss is non-cash charges."
-    elif says_most:
-        line = f"Most of Anthropic's reported loss is {kind}."
+    if noncash and accounting:
+        kind = "non-cash accounting charges"
+    elif noncash:
+        kind = "non-cash charges"
     else:
-        figure = re.search(
-            r"\$\s?\d[\d.]*\s?billion in accounting charges",
-            source,
-            re.I,
-        )
-        if figure and kind == "accounting charges":
-            line = f"Anthropic's reported loss includes {figure.group(0)}."
-        else:
-            line = f"Anthropic's reported loss includes {kind}."
+        kind = "accounting charges"
+    figure = _charge_figure(source)
+    if re.search(r"\b(most|mostly)\b", source, re.I) and figure:
+        lead = f"Most of the {figure} is {kind}"
+    elif re.search(r"\b(most|mostly)\b", source, re.I):
+        lead = f"Most of Anthropic's reported loss is {kind}"
+    elif re.search(r"\bmajority\b", source, re.I) and figure:
+        lead = f"The majority of the {figure} is {kind}"
+    elif figure:
+        lead = f"Anthropic's reported loss includes {figure} in {kind}"
+    else:
+        lead = f"Anthropic's reported loss includes {kind}"
+    tail = ""
+    has_burn = re.search(r"operating burn", source, re.I) is not None
+    has_s1 = re.search(r"\bS-1\b", source) is not None
+    if has_burn and has_s1:
+        tail = ", and the figure to watch is operating burn in the S-1"
+    elif has_burn:
+        tail = ", and the figure to watch is operating burn"
+    line = lead + tail + "."
     if not line_is_grounded(line, source, analysis=True):
         return ""
     return line
@@ -384,6 +413,172 @@ def _money_why(article: Article) -> str:
     if re.search(r"\bopenai\b", title, re.I) and re.search(r"\b(raise|fundraising|ipo|\$)\b", title, re.I):
         return "The round changes how much compute OpenAI can buy."
     return ""
+
+
+_SPEAKER_VERB = r"(?:said|wrote|told|warned|called|added|noted)"
+_QUOTE_SPAN = re.compile(r'["“]([^"”]{8,})["”]')
+_ATTR_FORWARD = re.compile(
+    rf"\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+{_SPEAKER_VERB}\b([^.]*)",
+)
+_ATTR_BACK = re.compile(
+    rf'["“]([^"”]{{8,}})["”]\s*,?\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+{_SPEAKER_VERB}\b',
+)
+
+
+def _same_speaker(claimed: str, actual: str) -> bool:
+    claimed_words = {word.lower() for word in (claimed or "").split() if len(word) > 2}
+    actual_words = {word.lower() for word in (actual or "").split() if len(word) > 2}
+    return bool(claimed_words & actual_words)
+
+
+def _speaker_near(source: str, start: int, end: int) -> str:
+    before = source[max(0, start - 500):start]
+    after = source[end:end + 180]
+    named = list(re.finditer(
+        rf"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+{_SPEAKER_VERB}\b",
+        before,
+    ))
+    if named:
+        return named[-1].group(1)
+    if re.search(rf"\b(?:she|he)\s+{_SPEAKER_VERB}\b", before[-140:]) or re.search(
+        rf"^\s*,?\s*(?:she|he)\s+{_SPEAKER_VERB}\b",
+        after,
+    ):
+        people = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", before)
+        if people:
+            return people[-1]
+    return ""
+
+
+def _source_quotes(source: str) -> list:
+    quotes = []
+    for match in _QUOTE_SPAN.finditer(source or ""):
+        quotes.append((
+            _speaker_near(source, match.start(), match.end()),
+            match.group(1),
+        ))
+    return quotes
+
+
+def _flat_quote(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _quote_belongs_to(quote: str, speaker: str, source_quotes: list) -> bool:
+    folded = _flat_quote(quote)
+    if len(folded) < 8:
+        return False
+    for actual, text in source_quotes:
+        hay = _flat_quote(text)
+        if (folded in hay or hay in folded) and _same_speaker(speaker, actual):
+            return True
+    return False
+
+
+def sentence_misattributes(sentence: str, source: str) -> bool:
+    """True when a sentence gives someone a quote or a reporter's line they did not say."""
+    if not sentence or not source:
+        return False
+    quotes = _source_quotes(source)
+    seen = set()
+    attributions = []
+    for match in _ATTR_FORWARD.finditer(sentence):
+        attributions.append((match.group(1), match.group(2)))
+    for match in _ATTR_BACK.finditer(sentence):
+        attributions.append((match.group(2), match.group(1)))
+    for speaker, rest in attributions:
+        quoted = _QUOTE_SPAN.findall(rest if isinstance(rest, str) else "")
+        if not quoted and rest.strip().startswith('"'):
+            quoted = _QUOTE_SPAN.findall(rest)
+        if quoted:
+            for quote in quoted:
+                key = (speaker, quote)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not _quote_belongs_to(quote, speaker, quotes):
+                    return True
+            continue
+        words = re.findall(r"[A-Za-z0-9']+", rest)
+        for index in range(0, max(0, len(words) - 5)):
+            chunk = " ".join(words[index:index + 6]).lower()
+            if chunk not in source.lower():
+                continue
+            if not _quote_belongs_to(chunk, speaker, quotes):
+                return True
+    return False
+
+
+def _deattribute(sentence: str) -> str:
+    text = re.sub(
+        rf"\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+{_SPEAKER_VERB}\s+that\s+",
+        "",
+        sentence,
+        count=1,
+    )
+    text = re.sub(r'["“”]', "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def fix_quote_attribution(text: str, source: str) -> str:
+    """Drop or un-attribute a line that puts a reporter's words in someone's mouth."""
+    kept = []
+    for sentence in split_sentences(text or ""):
+        if not sentence_misattributes(sentence, source):
+            kept.append(sentence)
+            continue
+        stripped = _deattribute(sentence)
+        if (
+            stripped
+            and stripped != sentence
+            and not sentence_misattributes(stripped, source)
+            and line_is_grounded(stripped, source, analysis=True)
+        ):
+            kept.append(stripped)
+    return " ".join(kept)
+
+
+def _token_prices(source: str) -> list:
+    prices = []
+    for match in re.finditer(r"\$\s?(\d+(?:\.\d+)?)", source or ""):
+        window = source[max(0, match.start() - 60):match.end() + 60].lower()
+        if re.search(r"token|per\s+1\s*m|/\s*m\b|million", window):
+            prices.append(float(match.group(1)))
+    return prices
+
+
+def price_unit_mismatch(text: str, source: str) -> bool:
+    """'cents per million' does not describe a price the source states as $0.10 or more."""
+    if not re.search(r"\bcents?\s+per\s+million\b", text or "", re.I):
+        return False
+    return any(price >= 0.10 for price in _token_prices(source))
+
+
+def fix_price_units(text: str, source: str) -> str:
+    """Say under a dollar when that is what the source price is. Drop an unstated frontier-lab label."""
+    updated = text or ""
+    if price_unit_mismatch(updated, source):
+        prices = _token_prices(source)
+        if prices and all(0 < price < 1 for price in prices):
+            replacement = "under a dollar per million tokens"
+        else:
+            replacement = "per million tokens"
+        updated = re.sub(
+            r"\bcents?\s+per\s+million(?:\s+tokens)?\b",
+            replacement,
+            updated,
+            flags=re.I,
+        )
+    if re.search(r"frontier-lab model", updated, re.I) and not re.search(
+        r"frontier[-\s]lab", source or "", re.I
+    ):
+        updated = re.sub(r"\bfrontier-lab model\b", "model", updated, flags=re.I)
+    return re.sub(r"\s{2,}", " ", updated).strip()
 
 
 _MONEY_AMOUNT = re.compile(
@@ -890,6 +1085,41 @@ def lede_names_stories(lede: str, rows: list) -> bool:
     return hits >= needed
 
 
+def _story_keys(row, rows: list) -> list:
+    """Words that identify this story and not the others in the lede."""
+    headline = row[1] if len(row) > 1 else ""
+    own = set(tokens(f"{headline} {row[0].title}"))
+    others = set()
+    for other in rows[:3]:
+        if other is row:
+            continue
+        other_headline = other[1] if len(other) > 1 else ""
+        others |= set(tokens(f"{other_headline} {other[0].title}"))
+    unique = [
+        word for word in own
+        if len(word) >= 5 and word not in _LEDE_THEME and word not in others
+    ]
+    if unique:
+        return unique
+    return [word for word in own if len(word) >= 5 and word not in _LEDE_THEME]
+
+
+def lede_follows_rank(lede: str, rows: list) -> bool:
+    """The named stories appear in the same order as the ranked items."""
+    text = (lede or "").lower()
+    positions = []
+    for row in rows[:3]:
+        found = None
+        for word in _story_keys(row, rows):
+            at = text.find(word)
+            if at >= 0:
+                found = at
+                break
+        if found is not None:
+            positions.append(found)
+    return positions == sorted(positions)
+
+
 def _window_note(since, until) -> str:
     if since is None or until is None:
         return ""
@@ -933,10 +1163,10 @@ A hard number stays only when it appears in that item's text. Prefer the lab's o
 For each chosen item:
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what), using facts from that item's text. Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. For a reported loss, use the charge facts in the text: if it says most of a dollar figure is non-cash accounting charges, say that, and if it says to watch operating burn in the S-1, say that. Do not write that a loss changes what the lab can spend. Attribute a quotation only to the person the text quotes. A reporter's sentence is not that person's quote. Do not call a token price cents per million when the text states it in dollars. If every per-million price in the text is under a dollar, say under a dollar per million tokens. Do not call a model a frontier-lab model unless the text does. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
 Use only names, numbers, and quotes that appear in that item's text.
 
-lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
+lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, in the same order as the items, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 Keep each sentence under 380 characters.
 Return JSON only.
@@ -1348,6 +1578,9 @@ def _compose_group(
         ))
         body = _DETAILS_LEAK.split(body)[0].strip()
         why = _DETAILS_LEAK.split(why)[0].strip()
+        source = _source_text(article)
+        body = fix_quote_attribution(fix_price_units(body, source), source)
+        why = fix_quote_attribution(fix_price_units(why, source), source)
         body = _drop_repeated_why(body, why)
         if _CHROME.search(body) or _CHROME.search(headline):
             print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
@@ -1374,7 +1607,11 @@ def _compose_group(
     if _DANGLING_END.search(lede or ""):
         lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
     check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
+    if (
+        not line_is_grounded(check or lede, combined, analysis=True)
+        or not lede_names_stories(lede, pairs)
+        or not lede_follows_rank(lede, pairs)
+    ):
         lede = fit_lede(story_lede(pairs), since, until)
     return lede, pairs
 
