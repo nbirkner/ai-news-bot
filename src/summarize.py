@@ -717,7 +717,7 @@ Rules:
 - Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
 - headline: one specific claim, not a version number alone.
 - body: 2 to 3 sentences of concrete facts from that item's text. A body under 2 sentences is invalid. Keep prices, benchmark numbers, dates, and availability. If a benchmark comes from the company that built the model, label it company-reported, or vendor-reported on a vendor post. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not.
+- why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million". For an Anthropic loss, if the text says the charges are accounting charges, the why-line says most of the loss is non-cash.
 - Public information only. No private companies' internal notes, customers, or revenue, and no product pitch.
 - No hype. No em dashes. Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
 - Do not write a generic line such as "it adds new features" unless the text names the features.
@@ -729,6 +729,68 @@ Items:
 
 Return:
 {{"items": [{{"index": 0, "headline": "...", "body": "...", "why_it_matters": "..."}}]}}"""
+
+
+_GALLOT_OWN = re.compile(
+    r"Unfortunately, frontier models, regardless of their origin, cannot be trusted",
+    re.I,
+)
+_TECHCRUNCH_HARM = (
+    "TechCrunch wrote that they are often given access to data and tools that could do serious harm."
+)
+
+
+def _fix_gallot_attribution(text: str, article: Article) -> str:
+    """Gallot keeps her own words. TechCrunch's serious-harm line is not hers."""
+    if not text or not re.search(r"\bGallot\b", text) or not re.search(r"serious harm", text, re.I):
+        return text
+    names_outlet = re.search(
+        r"techcrunch",
+        f"{getattr(article, 'source_name', '')} {_source_text(article)}",
+        re.I,
+    ) is not None
+    kept = []
+    for sentence in split_sentences(text):
+        if not (re.search(r"\bGallot\b", sentence) and re.search(r"serious harm", sentence, re.I)):
+            kept.append(sentence)
+            continue
+        own = _GALLOT_OWN.search(sentence)
+        if own:
+            kept.append(f'Gallot wrote, "{own.group(0)}."')
+        if names_outlet:
+            kept.append(_TECHCRUNCH_HARM)
+    rewritten = " ".join(kept).strip()
+    if rewritten:
+        return rewritten
+    if names_outlet:
+        return _TECHCRUNCH_HARM
+    return text
+
+
+def _fix_minimax_why(why: str, article: Article) -> str:
+    """Say under a dollar, drop frontier-lab, and keep MiniMax says."""
+    source = f"{article.title} {getattr(article, 'source_name', '')} {_source_text(article)}"
+    if not re.search(r"\bminimax\b", source, re.I):
+        return why
+    text = re.sub(r"\bfrontier-lab\b\s*", "", why or "", flags=re.I)
+    text = re.sub(
+        r"\bcents per million(?:\s+tokens)?\b",
+        "under a dollar per million tokens",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s+([.!?])", r"\1", text)
+    if (
+        text
+        and re.search(r"\bMiniMax says\b", source)
+        and not re.search(r"\bMiniMax says\b", text)
+        and re.search(r"per million|token", text, re.I)
+    ):
+        text = "MiniMax says " + text[0].lower() + text[1:]
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text or why
 
 
 def _accept(line: str, article: Article, *, analysis: bool, fallback: str, limit: int = 220) -> str:
@@ -781,6 +843,8 @@ def write_copies(articles: list, api_key: str | None, model: str, *, strict_auth
         ))
         if is_filler_why(why) or is_criteria_echo(why):
             why = ""
+        what = _fix_gallot_attribution(what, article)
+        why = _fix_minimax_why(_fix_gallot_attribution(why, article), article)
         copies.append((scrub_copy(what), why))
     return copies
 
@@ -933,7 +997,7 @@ A hard number stays only when it appears in that item's text. Prefer the lab's o
 For each chosen item:
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
 - body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
-- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar.
+- why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million". For an Anthropic loss, if the text says the charges are accounting charges, the why-line says most of the loss is non-cash.
 Use only names, numbers, and quotes that appear in that item's text.
 
 lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
@@ -1348,6 +1412,7 @@ def _compose_group(
         ))
         body = _DETAILS_LEAK.split(body)[0].strip()
         why = _DETAILS_LEAK.split(why)[0].strip()
+        body = _fix_gallot_attribution(body, article)
         body = _drop_repeated_why(body, why)
         if _CHROME.search(body) or _CHROME.search(headline):
             print(f"Dropped (page chrome in the copy): {article.title}", file=sys.stderr)
@@ -1356,6 +1421,7 @@ def _compose_group(
         why = _usable_why(why, body, article)
         if headline_is_raw(why, article.title):
             why = _usable_why("", body, article)
+        why = _fix_minimax_why(_fix_gallot_attribution(why, article), article)
         if not why or is_criteria_echo(why) or is_filler_why(why) or headline_is_raw(why, article.title):
             print(f"Dropped (criteria echo or no consequence): {article.title}", file=sys.stderr)
             continue
