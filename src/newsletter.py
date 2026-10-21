@@ -121,6 +121,21 @@ def issue_date_long(issue) -> str:
     return f"{day.strftime('%A, %B')} {day.day}, {day.year}"
 
 
+def email_headline(issue) -> str:
+    """Inbox line for the letter. Month D, YYYY from the issue date, no weekday."""
+    raw = str(getattr(issue, "date", "") or "").strip()
+    try:
+        day = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return f"AI News, {day.strftime('%B')} {day.day}, {day.year}"
+
+
+def email_subject(issue) -> str:
+    """Same line as the headline. The MDX title stays whatever the issue carries."""
+    return email_headline(issue)
+
+
 def _byline(issue) -> str:
     date = issue_date_long(issue)
     if date:
@@ -319,7 +334,7 @@ def render_email(issue, *, broadcast: bool = True) -> str:
         rows.append(_row(inner, padding, border=not opened))
         opened = True
 
-    title = (issue.title or "").strip()
+    title = email_headline(issue)
     if title:
         add(
             f'<h1 class="fg" style="{_type(26, 600, INK, "1.25", tracking="-0.02em")};padding:0;">{_e(title)}</h1>',
@@ -379,7 +394,7 @@ def render_email(issue, *, broadcast: bool = True) -> str:
 <meta name="supported-color-schemes" content="light dark">
 <meta name="x-apple-disable-message-reformatting">
 <meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
-<title>{_e(issue.title)}</title>
+<title>{_e(email_subject(issue) or "AI News")}</title>
 <link rel="stylesheet" href="{FONT_LINK}">
 <style>{_dark_mode_css()}</style>
 </head>
@@ -414,9 +429,9 @@ def render_plain(issue, *, broadcast: bool = True) -> str:
         _byline(issue),
         "",
     ]
-    title = (issue.title or "").strip()
-    if title:
-        lines.extend([title, ""])
+    headline = email_headline(issue)
+    if headline:
+        lines.extend([headline, ""])
     stamp = window_line(issue)
     if stamp:
         lines.extend([stamp, ""])

@@ -5,6 +5,8 @@ from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.models import Article, BriefingItem, FetchReport, Issue
 from src.newsletter import (
     _pt_stamp,
+    email_headline,
+    email_subject,
     render_email,
     render_mdx,
     render_plain,
@@ -325,7 +327,8 @@ def test_email_is_inline_table_layout_with_dark_mode_and_unsubscribe_fallback():
     issue.items[0].url = "javascript:alert(1)"
     html = render_email(issue)
     assert "<script>" not in html
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "alert(1)" not in html
+    assert "<title>AI News, October 19, 2026</title>" in html
     assert "A &lt;b&gt;tag&lt;/b&gt; &amp; more" in html
     assert "javascript:" not in html
     assert 'role="presentation"' in html
@@ -377,6 +380,23 @@ def test_forwarded_readers_are_invited_to_subscribe():
         "Forwarded this? Subscribe at nikibirkner.com/ai-news\n"
         "https://www.nikibirkner.com/ai-news/\n"
     )
+
+
+def test_email_headline_and_subject_use_the_issue_date():
+    issue = _issue()
+    issue.title = "AI briefing, Monday, October 19"
+    assert email_headline(issue) == "AI News, October 19, 2026"
+    assert email_subject(issue) == "AI News, October 19, 2026"
+    html = render_email(issue)
+    plain = render_plain(issue)
+    assert "<title>AI News, October 19, 2026</title>" in html
+    assert ">AI News, October 19, 2026</h1>" in html
+    assert "AI briefing" not in html
+    assert "AI briefing" not in plain
+    assert "AI News, October 19, 2026" in plain
+    issue.date = "2026-10-05"
+    assert email_headline(issue) == "AI News, October 5, 2026"
+    assert "Monday" not in email_subject(issue)
 
 
 def test_source_link_is_the_publication_name():
