@@ -186,7 +186,7 @@ After dedupe, the top 15 candidates (configurable with `read_candidates`) are re
 python3 -m pytest tests/ -v
 ```
 
-Tests do not call Slack, Together, or Exa. HTTP is mocked.
+Tests do not call Slack, Together, or Exa. HTTP is mocked. Pull requests and pushes to `main` run this command in GitHub Actions (`.github/workflows/tests.yml`), with no API keys.
 
 ## Site archive (not edited from this repo)
 
