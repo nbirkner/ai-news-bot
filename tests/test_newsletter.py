@@ -406,8 +406,11 @@ def test_source_link_is_the_publication_name():
     assert "Vercel · vercel.com" not in html
 
 
-def test_cli_refuses_send_flag(monkeypatch):
+def test_cli_refuses_send_without_resend_secrets(monkeypatch):
     from main_newsletter import main
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_AUDIENCE_ID", raising=False)
     monkeypatch.setattr(
         "main_newsletter.generate_issue",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not generate")),
