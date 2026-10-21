@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
-from src.newsletter import render_email, render_mdx
+from src.newsletter import render_email, render_mdx, render_plain
 from src.usage import format_usage, reset_usage
 
 
@@ -95,8 +95,10 @@ def main(argv=None) -> int:
         return 2
     (out / f"{issue.date}.mdx").write_text(render_mdx(issue))
     (out / f"{issue.date}.html").write_text(render_email(issue))
+    (out / f"{issue.date}.txt").write_text(render_plain(issue))
     print(f"Wrote {out / (issue.date + '.mdx')}", file=sys.stderr)
     print(f"Wrote {out / (issue.date + '.html')}", file=sys.stderr)
+    print(f"Wrote {out / (issue.date + '.txt')}", file=sys.stderr)
     print("Dry run: nothing was posted or sent.", file=sys.stderr)
     return 0
 

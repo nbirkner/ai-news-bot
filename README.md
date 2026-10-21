@@ -26,7 +26,8 @@ Each run writes:
 | File | What |
 | --- | --- |
 | `out/YYYY-MM-DD.mdx` | Frontmatter `title`, `date`, `summary`, `tags`, then the stories |
-| `out/YYYY-MM-DD.html` | The same stories, plus a web link and `{{{RESEND_UNSUBSCRIBE_URL}}}` |
+| `out/YYYY-MM-DD.html` | The same stories as a 600px email, plus a web link and `{{{RESEND_UNSUBSCRIBE_URL}}}` |
+| `out/YYYY-MM-DD.txt` | Plain text of the same issue, with the same web link and unsubscribe line |
 | `out/YYYY-MM-DD.usage.txt` | Model, tokens per call, totals, and dollar cost |
 
 If a guardrail blocks the issue, the command writes `out/YYYY-MM-DD.blocked.txt` instead of the MDX and HTML, and exits 2.
@@ -194,7 +195,7 @@ Tests do not call Slack, Together, or Exa. HTTP is mocked. Pull requests and pus
 
 1. A content collection `src/content/newsletter/` whose schema accepts `title` (string), `date` (date), `summary` (string), and `tags` (list of strings). Drop each `out/YYYY-MM-DD.mdx` in that folder. The filename is the slug.
 2. `/newsletter`, an index of issues, newest first. Each row is the date, the title, and the summary, linking to `/newsletter/YYYY-MM-DD`. Use the same type and spacing as the rest of the site (the monospace aside, the quiet calendar palette). Do not invent a second visual system.
-3. `/newsletter/[slug]`, one page per issue that renders the MDX. The email's "Read this on the web" link points at `https://www.nikibirkner.com/newsletter/YYYY-MM-DD`.
+3. `/newsletter/[slug]`, one page per issue that renders the MDX. The email's "Read this on the web" link points at `https://nikibirkner.com/ai-news/YYYY-MM-DD`.
 4. A signup box on the index and on the home page, matching the existing form styling if the site already has inputs, otherwise a single email field and a button in the site's current type.
 5. A small Vercel function, not a client-side call to Resend. `POST /api/newsletter/subscribe` with `{ email }` creates a Resend contact in `RESEND_AUDIENCE_ID` as unsubscribed and emails a confirm link. `GET /api/newsletter/confirm?token=...` sets the contact to subscribed. That is the double opt-in. The function reads `RESEND_API_KEY` from Vercel env. The browser never sees the key.
 6. Resend domain verification for `nikibirkner.com` (SPF, DKIM, and the return-path Resend shows in the dashboard) before any broadcast from `newsletter@nikibirkner.com`. The dry run does not send, so this can wait until a send command exists.
