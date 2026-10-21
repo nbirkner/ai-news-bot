@@ -365,6 +365,20 @@ def test_email_uses_the_site_mark_orange_and_fonts():
     assert ">AI News</p>" in html
 
 
+def test_forwarded_readers_are_invited_to_subscribe():
+    html = render_email(_issue())
+    plain = render_plain(_issue())
+    top = html[html.index("Forwarded this?"):html.index(">AI News</p>")]
+    assert 'href="https://www.nikibirkner.com/ai-news/"' in top
+    assert ">nikibirkner.com/ai-news</a>" in top
+    assert "color:#C2410C" in top
+    assert "Fragment Mono" in top
+    assert plain.startswith(
+        "Forwarded this? Subscribe at nikibirkner.com/ai-news\n"
+        "https://www.nikibirkner.com/ai-news/\n"
+    )
+
+
 def test_source_link_is_the_publication_name():
     html = render_email(_issue())
     assert 'href="https://vercel.com/blog/ai-gateway-production-index-october-2026"' in html

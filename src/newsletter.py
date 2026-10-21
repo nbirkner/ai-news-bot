@@ -33,6 +33,9 @@ WARM_DARK = "#5A2A12"
 # favicon.svg is the mark. Gmail does not render SVG, so this is the site PNG.
 LOGO_URL = "https://nikibirkner.com/apple-touch-icon.png"
 LOGO_PX = 36
+# Archive index for people who were forwarded an issue. www, with the trailing slash.
+SUBSCRIBE_URL = "https://www.nikibirkner.com/ai-news/"
+SUBSCRIBE_LABEL = "nikibirkner.com/ai-news"
 FONT_LINK = "https://fonts.googleapis.com/css2?family=Fragment+Mono&amp;family=Schibsted+Grotesk:wght@400;600&amp;display=swap"
 
 
@@ -174,17 +177,17 @@ def _type(size: int, weight: int, color: str, line: str, *, bottom: int = 0, tra
     return ";".join(css)
 
 
-def _link_style(size: int = 14, color: str = ACCENT, underline: str = "") -> str:
+def _link_style(size: int = 14, color: str = ACCENT, underline: str = "", family: str = "") -> str:
     line = underline or color
     return (
         f"color:{color};text-decoration:underline;text-decoration-color:{line};"
         f"text-underline-offset:3px;text-decoration-thickness:1px;"
-        f"font-family:{SANS};font-size:{size}px;font-weight:400;line-height:1.5"
+        f"font-family:{family or SANS};font-size:{size}px;font-weight:400;line-height:1.5"
     )
 
 
-def _link(href: str, label: str, size: int = 14, color: str = ACCENT, underline: str = "", klass: str = "link") -> str:
-    return f'<a class="{klass}" href="{href}" style="{_link_style(size, color, underline)}">{_e(label)}</a>'
+def _link(href: str, label: str, size: int = 14, color: str = ACCENT, underline: str = "", klass: str = "link", family: str = "") -> str:
+    return f'<a class="{klass}" href="{href}" style="{_link_style(size, color, underline, family)}">{_e(label)}</a>'
 
 
 def _row(inner: str, padding: str, border: bool = False, klass: str = "", extra: str = "", bgcolor: str = "") -> str:
@@ -288,7 +291,20 @@ def render_email(issue, *, broadcast: bool = True) -> str:
         f'<p class="muted" style="{_type(13, 400, MUTED, "1.45", family=MONO)};margin-top:5px;">{_e(_byline(issue))}</p>'
         "</td></tr></table>"
     )
+    subscribe = (
+        f'<p class="muted" style="{_type(12, 400, MUTED, "1.45", family=MONO)}">'
+        "Forwarded this? Subscribe at "
+        + _link(
+            html.escape(SUBSCRIBE_URL, quote=True),
+            SUBSCRIBE_LABEL,
+            size=12,
+            color=ACCENT,
+            family=MONO,
+        )
+        + "</p>"
+    )
     rows = [
+        _row(subscribe, "0 0 14px"),
         _row(masthead, "0 0 18px"),
         (
             "<tr><td class=\"accent-bar\" bgcolor=\"" + ACCENT + "\" height=\"3\" "
@@ -390,7 +406,14 @@ def render_email(issue, *, broadcast: bool = True) -> str:
 
 def render_plain(issue, *, broadcast: bool = True) -> str:
     """Plain-text twin of render_email. Same words, no markup."""
-    lines = ["AI News", _byline(issue), ""]
+    lines = [
+        f"Forwarded this? Subscribe at {SUBSCRIBE_LABEL}",
+        SUBSCRIBE_URL,
+        "",
+        "AI News",
+        _byline(issue),
+        "",
+    ]
     title = (issue.title or "").strip()
     if title:
         lines.extend([title, ""])
