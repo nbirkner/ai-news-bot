@@ -348,6 +348,23 @@ def test_email_is_inline_table_layout_with_dark_mode_and_unsubscribe_fallback():
     assert ">Vercel</a>" not in preview
 
 
+def test_email_uses_the_site_mark_orange_and_fonts():
+    html = render_email(_issue())
+    assert 'src="https://nikibirkner.com/apple-touch-icon.png"' in html
+    assert 'alt="Niki Birkner"' in html
+    assert 'width="36"' in html
+    assert "#C2410C" in html
+    assert "#FED7AA" in html
+    assert "#FB923C" in html
+    assert "Schibsted Grotesk" in html
+    assert "Fragment Mono" in html
+    assert "Helvetica Neue" in html
+    assert "@font-face" in html
+    assert "fonts.googleapis.com" in html
+    assert 'class="accent"' in html
+    assert ">AI News</p>" in html
+
+
 def test_source_link_is_the_publication_name():
     html = render_email(_issue())
     assert 'href="https://vercel.com/blog/ai-gateway-production-index-october-2026"' in html

@@ -14,15 +14,26 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 UNSUBSCRIBE = "{{{RESEND_UNSUBSCRIBE_URL}}}"
 UNSUBSCRIBE_FALLBACK = WEB_ROOT
 
-# nikibirkner.com tokens. Schibsted Grotesk when a client has it; otherwise the
-# same system grotesque the site falls back to. No remote font request.
-SANS = "'Schibsted Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+# Tokens from nikibirkner.com (:root in the site CSS).
+# Light --accent #C2410C, --g2 #FB923C, --g1 #FED7AA, --fg #111111,
+# --muted #6B6B6B, --hairline #EAEAE8, --g0 #F1F1EF, --bg #FFFFFF.
+# Dark --accent #FB923C, --g1 #5A2A12, --bg #0F0F0F, --fg #EDEDED,
+# --muted #9A9A9A, --hairline #222222.
+SANS = "'Schibsted Grotesk',-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif"
+MONO = "'Fragment Mono',ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace"
 INK = "#111111"
 MUTED = "#6B6B6B"
 HAIR = "#EAEAE8"
 CANVAS = "#F1F1EF"
 SHEET = "#FFFFFF"
 ACCENT = "#C2410C"
+ACCENT_DARK = "#FB923C"
+WARM = "#FED7AA"
+WARM_DARK = "#5A2A12"
+# favicon.svg is the mark. Gmail does not render SVG, so this is the site PNG.
+LOGO_URL = "https://nikibirkner.com/apple-touch-icon.png"
+LOGO_PX = 36
+FONT_LINK = "https://fonts.googleapis.com/css2?family=Fragment+Mono&amp;family=Schibsted+Grotesk:wght@400;600&amp;display=swap"
 
 
 def web_url(issue) -> str:
@@ -147,10 +158,10 @@ def _paragraphs(body: str) -> list:
     return parts or [text]
 
 
-def _type(size: int, weight: int, color: str, line: str, *, bottom: int = 0, tracking: str = "") -> str:
+def _type(size: int, weight: int, color: str, line: str, *, bottom: int = 0, tracking: str = "", family: str = "") -> str:
     css = [
         "margin:0",
-        f"font-family:{SANS}",
+        f"font-family:{family or SANS}",
         f"font-size:{size}px",
         f"font-weight:{weight}",
         f"line-height:{line}",
@@ -163,24 +174,27 @@ def _type(size: int, weight: int, color: str, line: str, *, bottom: int = 0, tra
     return ";".join(css)
 
 
-def _link_style(size: int = 14) -> str:
+def _link_style(size: int = 14, color: str = ACCENT, underline: str = "") -> str:
+    line = underline or color
     return (
-        f"color:{INK};text-decoration:underline;text-decoration-color:{ACCENT};"
+        f"color:{color};text-decoration:underline;text-decoration-color:{line};"
         f"text-underline-offset:3px;text-decoration-thickness:1px;"
         f"font-family:{SANS};font-size:{size}px;font-weight:400;line-height:1.5"
     )
 
 
-def _link(href: str, label: str, size: int = 14) -> str:
-    return f'<a class="link" href="{href}" style="{_link_style(size)}">{_e(label)}</a>'
+def _link(href: str, label: str, size: int = 14, color: str = ACCENT, underline: str = "", klass: str = "link") -> str:
+    return f'<a class="{klass}" href="{href}" style="{_link_style(size, color, underline)}">{_e(label)}</a>'
 
 
-def _row(inner: str, padding: str, border: bool = False) -> str:
-    klass = ' class="rule"' if border else ""
+def _row(inner: str, padding: str, border: bool = False, klass: str = "", extra: str = "", bgcolor: str = "") -> str:
+    classes = " ".join(part for part in (("rule" if border else ""), klass) if part)
+    class_attr = f' class="{classes}"' if classes else ""
     rule = f"border-top:1px solid {HAIR};" if border else ""
+    bg_attr = f' bgcolor="{bgcolor}"' if bgcolor else ""
     return (
         "<tr>"
-        f'<td align="left"{klass} style="padding:{padding};{rule}margin:0;">'
+        f'<td align="left"{class_attr}{bg_attr} style="padding:{padding};{rule}{extra}margin:0;">'
         f"{inner}</td></tr>"
     )
 
@@ -208,6 +222,15 @@ def _story_html(item) -> str:
     return "".join(parts)
 
 
+def _font_face_css() -> str:
+    """Latin files for Apple Mail and iOS. Gmail drops this and uses the stack."""
+    return """
+    @font-face{font-family:'Fragment Mono';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/fragmentmono/v6/4iCr6K5wfMRRjxp0DA6-2CLnB4NHhqcL71Q.woff2) format('woff2');}
+    @font-face{font-family:'Schibsted Grotesk';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/schibstedgrotesk/v7/Jqz55SSPQuCQF3t8uOwiUL-taUTtap9GayojdSFO.woff2) format('woff2');}
+    @font-face{font-family:'Schibsted Grotesk';font-style:normal;font-weight:600;font-display:swap;src:url(https://fonts.gstatic.com/s/schibstedgrotesk/v7/Jqz55SSPQuCQF3t8uOwiUL-taUTtap9GayojdSFO.woff2) format('woff2');}
+    """
+
+
 def _dark_mode_css() -> str:
     """iOS Mail honors this. Gmail drops <head> CSS, so light styles stay inline.
 
@@ -215,16 +238,21 @@ def _dark_mode_css() -> str:
     after it and wins on the same selector.
     """
     return f"""
+    {_font_face_css()}
     :root {{ color-scheme: light dark; supported-color-schemes: light dark; }}
     a[x-apple-data-detectors] {{ color: inherit !important; text-decoration: inherit !important; }}
-    a.link, a.link:visited {{ color: {INK}; text-decoration-color: {ACCENT}; }}
+    a.link, a.link:visited {{ color: {ACCENT}; text-decoration-color: {ACCENT}; }}
     @media (prefers-color-scheme: dark) {{
       .bg {{ background-color: #0F0F0F !important; }}
       .sheet {{ background-color: #161616 !important; border-color: #222222 !important; }}
       .fg {{ color: #EDEDED !important; }}
       .muted {{ color: #9A9A9A !important; }}
       .rule {{ border-color: #222222 !important; }}
-      a.link, a.link:visited {{ color: #EDEDED !important; text-decoration-color: #FB923C !important; }}
+      .accent {{ color: {ACCENT_DARK} !important; }}
+      .accent-bar {{ background-color: {ACCENT_DARK} !important; }}
+      .foot {{ background-color: {WARM_DARK} !important; }}
+      a.link, a.link:visited {{ color: {ACCENT_DARK} !important; text-decoration-color: {ACCENT_DARK} !important; }}
+      a.footlink, a.footlink:visited {{ color: #EDEDED !important; text-decoration-color: {ACCENT_DARK} !important; }}
     }}
     @media only screen and (max-width: 620px) {{
       .wrap {{ padding-left: 8px !important; padding-right: 8px !important; }}
@@ -236,23 +264,39 @@ def _dark_mode_css() -> str:
 def render_email(issue, *, broadcast: bool = True) -> str:
     """HTML letter for Resend.
 
-    Every light-mode style is inline. The head block only adds the dark-mode
-    palette and a narrower phone padding, which Gmail would strip anyway.
+    Every light-mode style is inline. The head block adds the site fonts,
+    the dark-mode palette, and a narrower phone padding. Gmail drops that
+    block and keeps the inline fallbacks.
     Broadcasts unsubscribe through Resend's placeholder. Other renders use
     the archive URL so the control is not a dead link.
     """
     page = web_url(issue)
     unsub = html.escape(unsubscribe_href(broadcast), quote=True)
     preview = (issue.summary or "").strip() or "AI News by Niki Birkner"
+    logo = (
+        f'<a href="{_e(page)}" style="text-decoration:none;border:0;">'
+        f'<img src="{LOGO_URL}" width="{LOGO_PX}" height="{LOGO_PX}" alt="Niki Birkner" '
+        f'style="display:block;border:0;outline:none;text-decoration:none;width:{LOGO_PX}px;height:{LOGO_PX}px;">'
+        f"</a>"
+    )
+    masthead = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+        "<tr>"
+        f'<td width="{LOGO_PX}" valign="middle" style="width:{LOGO_PX}px;padding:0 12px 0 0;">{logo}</td>'
+        '<td valign="middle" align="left">'
+        f'<p class="accent" style="{_type(18, 600, ACCENT, "1.2", tracking="-0.02em")}">AI News</p>'
+        f'<p class="muted" style="{_type(13, 400, MUTED, "1.45", family=MONO)};margin-top:5px;">{_e(_byline(issue))}</p>'
+        "</td></tr></table>"
+    )
     rows = [
-        _row(
-            "<p class=\"fg\" style=\"" + _type(17, 600, INK, "1.3", tracking="-0.01em") + "\">AI News</p>"
-            + "<p class=\"muted\" style=\"" + _type(14, 400, MUTED, "1.45") + ";margin-top:6px;\">"
-            + _e(_byline(issue)) + "</p>",
-            "0 0 22px",
-        )
+        _row(masthead, "0 0 18px"),
+        (
+            "<tr><td class=\"accent-bar\" bgcolor=\"" + ACCENT + "\" height=\"3\" "
+            f'style="height:3px;line-height:3px;font-size:3px;background-color:{ACCENT};padding:0;margin:0;">'
+            "&nbsp;</td></tr>"
+        ),
     ]
-    opened = False
+    opened = True
 
     def add(inner: str, padding: str) -> None:
         nonlocal opened
@@ -268,7 +312,7 @@ def render_email(issue, *, broadcast: bool = True) -> str:
     stamp = window_line(issue)
     if stamp:
         add(
-            f'<p class="muted" style="{_type(13, 400, MUTED, "1.45")}">{_e(stamp)}</p>',
+            f'<p class="muted" style="{_type(13, 400, MUTED, "1.45", family=MONO)}">{_e(stamp)}</p>',
             "10px 0 0" if opened else "24px 0 0",
         )
     summary = (issue.summary or "").strip()
@@ -291,11 +335,14 @@ def render_email(issue, *, broadcast: bool = True) -> str:
             border=True,
         ))
     rows.append(_row(
-        "<p class=\"muted\" style=\"" + _type(14, 400, MUTED, "1.5") + "\">AI News by Niki Birkner</p>"
-        + f'<p style="margin:12px 0 0;">{_link(_e(page), "Read this on the web")}</p>'
-        + f'<p style="margin:8px 0 0;">{_link(unsub, "Unsubscribe")}</p>',
-        "26px 0 0",
+        "<p class=\"fg\" style=\"" + _type(14, 400, INK, "1.5") + "\">AI News by Niki Birkner</p>"
+        + f'<p style="margin:12px 0 0;">{_link(_e(page), "Read this on the web", color=INK, underline=ACCENT, klass="footlink")}</p>'
+        + f'<p style="margin:8px 0 0;">{_link(unsub, "Unsubscribe", color=INK, underline=ACCENT, klass="footlink")}</p>',
+        "16px 16px",
         border=True,
+        klass="foot",
+        extra=f"background-color:{WARM};",
+        bgcolor=WARM,
     ))
     body_style = (
         f"margin:0;padding:0;background-color:{CANVAS};color:{INK};"
@@ -317,6 +364,7 @@ def render_email(issue, *, broadcast: bool = True) -> str:
 <meta name="x-apple-disable-message-reformatting">
 <meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
 <title>{_e(issue.title)}</title>
+<link rel="stylesheet" href="{FONT_LINK}">
 <style>{_dark_mode_css()}</style>
 </head>
 <body class="bg" bgcolor="{CANVAS}" style="{body_style}">
