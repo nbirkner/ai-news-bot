@@ -3,7 +3,14 @@ from datetime import datetime, timezone
 
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.models import Article, BriefingItem, FetchReport, Issue
-from src.newsletter import _pt_stamp, render_email, render_mdx, render_slack, slack_contains_story
+from src.newsletter import (
+    _pt_stamp,
+    render_email,
+    render_mdx,
+    render_plain,
+    render_slack,
+    slack_contains_story,
+)
 from src.summarize import SchemaError, _rank_prompt, compose_briefing
 
 
@@ -64,8 +71,22 @@ def test_slack_mdx_and_email_come_from_the_same_issue():
     assert "date: 2026-10-19" in mdx
     assert "summary:" in mdx
     assert "tags: [models]" in mdx
-    assert "https://www.nikibirkner.com/newsletter/2026-10-19" in html
+    assert "https://nikibirkner.com/ai-news/2026-10-19" in html
+    assert "https://www.nikibirkner.com/newsletter" not in html
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in html
+    assert "AI News" in html
+    assert "Niki Birkner" in html
+    assert "Monday, October 19, 2026" in html
+    assert 'width="600"' in html
+    assert "max-width:600px" in html
+    plain = render_plain(issue)
+    assert item.what_happened in plain
+    assert "71.5%" in plain
+    assert item.why_it_matters in plain
+    assert item.url in plain
+    assert "https://nikibirkner.com/ai-news/2026-10-19" in plain
+    assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in plain
+    assert "<html" not in plain.lower()
     assert "for Together" not in slack
     assert "for Together" not in mdx
     assert "for Together" not in html
@@ -237,6 +258,11 @@ def test_cli_writes_out_and_never_sends(tmp_path, monkeypatch):
     assert "Tokens and dollars are splitting" in mdx
     assert "Tokens and dollars are splitting" in html
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in html
+    text = (tmp_path / "2026-10-19.txt").read_text()
+    assert "Tokens and dollars are splitting" in text
+    assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in text
+    assert "https://nikibirkner.com/ai-news/2026-10-19" in text
+    assert "sk-personal-test" not in text
     assert "sk-personal-test" not in mdx
     assert "sk-personal-test" not in html
     assert "sk-personal-test" not in usage
@@ -289,6 +315,44 @@ def test_a_ranking_failure_writes_a_quiet_note_and_exits(tmp_path, monkeypatch):
     assert "Not publishing" in note
     assert not (tmp_path / "2026-10-19.mdx").exists()
     assert not (tmp_path / "2026-10-19.html").exists()
+    assert not (tmp_path / "2026-10-19.txt").exists()
+
+
+def test_email_is_inline_table_layout_with_dark_mode_and_unsubscribe_fallback():
+    issue = _issue()
+    issue.title = "<script>alert(1)</script>"
+    issue.items[0].what_happened = "A <b>tag</b> & more"
+    issue.items[0].url = "javascript:alert(1)"
+    html = render_email(issue)
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "A &lt;b&gt;tag&lt;/b&gt; &amp; more" in html
+    assert "javascript:" not in html
+    assert 'role="presentation"' in html
+    assert "color-scheme" in html
+    assert "prefers-color-scheme: dark" in html
+    assert "#111111" in html
+    assert "#F1F1EF" in html
+    assert "#0F0F0F" in html
+    assert "Unsubscribe" in html
+    assert html.count("{{{RESEND_UNSUBSCRIBE_URL}}}") == 1
+    assert 'style="' in html
+
+    preview = render_email(issue, broadcast=False)
+    plain = render_plain(issue, broadcast=False)
+    assert "{{{RESEND_UNSUBSCRIBE_URL}}}" not in preview
+    assert "{{{RESEND_UNSUBSCRIBE_URL}}}" not in plain
+    assert 'href="https://nikibirkner.com/ai-news"' in preview
+    assert "Unsubscribe\nhttps://nikibirkner.com/ai-news\n" in plain
+    assert "Vercel" in preview
+    assert ">Vercel</a>" not in preview
+
+
+def test_source_link_is_the_publication_name():
+    html = render_email(_issue())
+    assert 'href="https://vercel.com/blog/ai-gateway-production-index-october-2026"' in html
+    assert ">Vercel</a>" in html
+    assert "Vercel · vercel.com" not in html
 
 
 def test_cli_refuses_send_flag(monkeypatch):
