@@ -163,16 +163,31 @@ def test_source_outage_does_not_post_a_quiet_note(tmp_path):
         )
 
 
-def test_workflow_is_a_newsletter_dry_run():
+def test_workflow_sends_monday_at_9am_pacific():
     from pathlib import Path
     text = Path(".github/workflows/briefing.yml").read_text()
     assert "main_newsletter.py" in text
     assert "--dry-run" in text
+    assert "--send" in text
     assert "--window-end" in text
+    assert "weekly_window_start" in text
     assert "TOGETHER_API_KEY" in text
     assert "EXA_API_KEY" in text
+    assert "RESEND_API_KEY" in text
+    assert "RESEND_AUDIENCE_ID" in text
+    assert 'cron: "0 16 * * 1"' in text
+    assert 'cron: "0 17 * * 1"' in text
+    assert "America/Los_Angeles" in text
+    assert '[ "$hour" = "09" ]' in text
+    assert "dry_run:" in text
+    assert "default: true" in text
+    assert "test_to:" in text
+    assert "TEST_TO:" in text
+    assert "steps.newsletter.outputs.sent == 'true'" in text
     assert "SLACK_WEBHOOK_URL" not in text
+    assert "SITE_REPO_TOKEN" not in text
     assert "post_to_slack" not in text
+    assert "main_briefing.py" not in text
     assert "0 15 * * 1,3,5" not in text
     assert not Path(".github/workflows/breaking-check.yml").exists()
     assert not Path(".github/workflows/daily-digest.yml").exists()

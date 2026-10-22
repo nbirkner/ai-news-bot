@@ -103,6 +103,63 @@ def remember_briefing(when: datetime, articles: list, state_file: Path, *, keep:
     save_recent(rows, state_file, keep=keep)
 
 
+def remember_issue(issue, state_file: Path = Path("state/recent_briefings.json"), *, when: datetime | None = None, keep: int = 5) -> None:
+    """Append one sent newsletter. Dry runs and test emails must not call this."""
+    when = when or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when = when.astimezone(timezone.utc)
+    rows = load_recent(state_file, keep=keep)
+    rows.append({
+        "posted_at": when.isoformat(),
+        "date": getattr(issue, "date", ""),
+        "items": [
+            {"title": item.what_happened, "url": item.url}
+            for item in getattr(issue, "items", []) or []
+            if getattr(item, "what_happened", "") and getattr(item, "url", "")
+        ],
+    })
+    save_recent(rows, state_file, keep=keep)
+
+
+def load_sent_issues(state_file: Path = Path("state/sent_issues.json")) -> dict:
+    """Issue dates that already went out, keyed by YYYY-MM-DD."""
+    if not state_file.exists():
+        return {}
+    try:
+        data = json.loads(state_file.read_text())
+    except json.JSONDecodeError:
+        return {}
+    issues = data.get("issues") if isinstance(data, dict) else None
+    if not isinstance(issues, dict):
+        return {}
+    return {str(date): row for date, row in issues.items() if isinstance(row, dict)}
+
+
+def issue_already_sent(date: str, state_file: Path = Path("state/sent_issues.json")) -> bool:
+    return bool((date or "").strip()) and (date or "").strip() in load_sent_issues(state_file)
+
+
+def mark_issue_sent(
+    date: str,
+    state_file: Path = Path("state/sent_issues.json"),
+    *,
+    broadcast_id: str,
+    when: datetime | None = None,
+) -> None:
+    """Record one real broadcast. Call this only after Resend accepts the send."""
+    when = when or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    issues = load_sent_issues(state_file)
+    issues[(date or "").strip()] = {
+        "sent_at": when.astimezone(timezone.utc).isoformat(),
+        "broadcast_id": broadcast_id,
+    }
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"issues": issues}, indent=2, sort_keys=True) + "\n")
+
+
 def recent_items(briefings: list) -> list:
     items = []
     for briefing in briefings:
