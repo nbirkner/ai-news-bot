@@ -1,0 +1,94 @@
+name: AI lessons
+
+# Tuesday lesson at 9:00 America/Los_Angeles. Two UTC crons cover daylight
+# saving; the guard continues only when the Pacific hour is 9.
+# This workflow ingests a lesson file. It does not send email, post to Slack,
+# or publish. DRY_RUN is hardcoded. There is no send flag.
+on:
+  schedule:
+    - cron: "0 16 * * 2"
+    - cron: "0 17 * * 2"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Lesson date (YYYY-MM-DD). Blank uses today in America/Los_Angeles."
+        type: string
+        default: ""
+      dry_run:
+        description: "Always a dry run. This input does not enable sending."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-lessons
+  cancel-in-progress: false
+
+jobs:
+  lesson:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pacific 9am guard
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run. The 9:00 America/Los_Angeles guard applies to the schedule only."
+            exit 0
+          fi
+          hour=$(TZ=America/Los_Angeles date +%H)
+          echo "America/Los_Angeles hour is ${hour}"
+          if [ "$hour" = "09" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping. The Tuesday lesson runs only when the America/Los_Angeles hour is 9."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.proceed == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+        if: steps.guard.outputs.proceed == 'true'
+
+      - name: Resolve lesson date
+        id: when
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LESSON_DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] || [ -z "$LESSON_DATE" ]; then
+            day=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          else
+            day="$LESSON_DATE"
+          fi
+          if ! [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "Lesson date must be YYYY-MM-DD" >&2
+            exit 2
+          fi
+          echo "date=$day" >> "$GITHUB_OUTPUT"
+
+      - name: Lesson dry run
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          DRY_RUN: "1"
+          LESSON_WEEKLY_DIR: /cursor/stores/bot/ai-lessons-weekly
+        run: python main_newsletter.py --mode lesson --dry-run --date "${{ steps.when.outputs.date }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.guard.outputs.proceed == 'true'
+        with:
+          name: lesson-out
+          path: out/
+          if-no-files-found: ignore

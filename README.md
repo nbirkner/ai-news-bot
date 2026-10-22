@@ -66,6 +66,32 @@ The send does not run when the issue has no stories, or when that issue date is 
 
 Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE_REPO_TOKEN` are not used by this workflow.
 
+## Ingest from the Learning bot
+
+The Learning bot is the content source for the weekly files. The Monday send path (9:00 AM America/Los_Angeles, `--send`, `--test-to`, and `state/sent_issues.json`) is unchanged.
+
+### News roundup
+
+`scripts/ingest_news.py` reads `/cursor/stores/bot/ai-news-weekly/YYYY-MM-DD.md` (override the directory with `NEWS_WEEKLY_DIR` or pass `--roundup`). The file starts with an italic briefing line, a window line, a lede, then one block per story: an italic headline, the public facts, a reflection line, and a Slack link `<https://example.com/story|Publication>`.
+
+It writes `sources/YYYY-MM-DD.json` in the weekly sources schema (`title`, `url`, `source`, `published`, `summary`, and `reflection` when the story has one). `published` is the file date. One broken story rejects the file. A missing roundup writes nothing and exits 2.
+
+`--render` also writes `out/YYYY-MM-DD.mdx`, `.html`, and `.txt` in the Monday email template. The inbox title stays `AI News, October 19, 2026` for that date. The command does not send.
+
+```bash
+python3 scripts/ingest_news.py --date 2026-10-19 --render
+```
+
+### Lesson file
+
+`python3 main_newsletter.py --mode lesson --dry-run --date 2026-10-20` reads `/cursor/stores/bot/ai-lessons-weekly/YYYY-MM-DD-slug.md` (`LESSON_WEEKLY_DIR` overrides the directory). The file is the public lesson format, including frontmatter `title`, `date`, `level` (`Foundations`, `Systems`, or `Frontier`), `slug`, and `summary`. A valid file is copied to `out/YYYY-MM-DD-slug.mdx` for the site. A missing file, a bad level, or a draft that skips a required section writes only `out/YYYY-MM-DD.blocked.txt` containing `BLOCKED: <reason>`. `--send`, `--post`, and `--publish` exit 2. The command never calls Resend.
+
+When the Monday newsletter renders and that week's lesson file is present and valid, the issue gains a **This week's lesson** section (title, summary, and the lesson link). No file means the section is left out and the issue still renders.
+
+### Tuesday dry run
+
+Tuesdays at 9:00 AM America/Los_Angeles. `.github/workflows/lessons.yml` runs two UTC crons, `0 16 * * 2` and `0 17 * * 2`. A guard continues only when the America/Los_Angeles hour is 9. `DRY_RUN` is `"1"` and the command is `--mode lesson --dry-run`. It does not send, post, or publish.
+
 ### Cost lines in the usage log
 
 Together GLM-5.3 (`zai-org/GLM-5.3`), from [together.ai/pricing](https://www.together.ai/pricing) on 19 Oct 2026: **$1.40 / 1M input tokens**, **$4.40 / 1M output tokens**. The log multiplies the token totals by those rates and by 13 for a Monday / Wednesday / Friday month.
