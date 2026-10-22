@@ -5,11 +5,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from src.dedupe import canonical_url, jaccard
-from src.discover import prepare_candidates
+from src.discover import discovery_blocked, prepare_candidates
 from src.fetch import AI_TERMS, fetch_all
 from src.guardrails import item_block_reasons, item_drop_reasons, publishing_blocks
 from src.models import BriefingItem, Issue
 from src.state import load_recent, load_seen, recent_items
+from src.sources_file import load_sources_file, sources_path_for
 from src.summarize import AuthError, SchemaError, compose_briefing
 
 _TAGS = (
@@ -129,11 +130,30 @@ def generate_issue(
     recent=None,
     sending: bool = False,
     last_slot: str = "",
+    sources_root=None,
 ) -> tuple:
-    """Return (issue, failures, discovery). Never posts or sends."""
+    """Return (issue, failures, discovery). Never posts or sends.
+
+    The Monday newsletter reads ``sources/<window end>.json`` first. A missing
+    or invalid file falls back to RSS. Exa runs only when EXA_ENABLED=1.
+    """
     until = _utc(until)
     since = _utc(since)
     print(f"Newsletter window {since.isoformat()} to {until.isoformat()}", file=sys.stderr)
+    sources_path = sources_path_for(until, sources_root)
+    loaded = load_sources_file(sources_path)
+    if loaded.status == "ok":
+        print(
+            f"Sources file {sources_path}: {len(loaded.articles)} stories",
+            file=sys.stderr,
+        )
+    elif loaded.status == "missing":
+        print(f"Sources file {sources_path} is missing. RSS only.", file=sys.stderr)
+    else:
+        print(
+            f"Sources file {sources_path} is invalid ({loaded.error}). RSS only.",
+            file=sys.stderr,
+        )
 
     seen = {}
     if seen_path is not None:
@@ -154,11 +174,11 @@ def generate_issue(
         fetcher=fetcher,
         searcher=searcher,
         reader=reader,
+        curated=loaded.articles,
+        sources_status=loaded.status,
+        sources_error=loaded.error,
     )
-    feeds_untrusted = discovered.successes == 0 or (
-        discovered.feed_count == 0 and discovered.successes * 2 < discovered.source_count
-    )
-    if feeds_untrusted and discovered.exa_count == 0:
+    if discovery_blocked(discovered):
         return _empty(until, since), ["Too many sources failed to trust an empty issue."], discovered
 
     limit = int(config.get("max_items", 7))

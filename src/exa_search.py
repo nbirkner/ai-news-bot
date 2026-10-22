@@ -1,7 +1,9 @@
 """Public web discovery through Exa.
 
+Exa runs only when EXA_ENABLED=1. It is off by default.
+
 Each POST to /search or /contents counts as one call. EXA_MAX_CALLS
-(default 30) is a hard cap for the whole run. Callers log budget.used.
+(default 6) is a hard cap for the whole run. Callers log budget.used.
 A missing key, a credit error, or any other Exa failure must not sink
 the briefing: feeds still run.
 """
@@ -107,7 +109,16 @@ class ExaBudget:
         return f"Exa calls: {self.used}/{self.cap}{note}"
 
 
-def cap_from_env(default: int = 30) -> int:
+DEFAULT_EXA_MAX_CALLS = 6
+
+
+def exa_enabled(environ=None) -> bool:
+    """True only when EXA_ENABLED=1. Any other value, including unset, is off."""
+    environ = os.environ if environ is None else environ
+    return (environ.get("EXA_ENABLED") or "").strip() == "1"
+
+
+def cap_from_env(default: int = DEFAULT_EXA_MAX_CALLS) -> int:
     raw = os.environ.get("EXA_MAX_CALLS", "").strip()
     if not raw:
         return default
@@ -123,7 +134,7 @@ def resolve_cap(config: dict | None = None) -> int:
         return cap_from_env()
     if config and config.get("exa_max_calls") is not None:
         return max(0, int(config["exa_max_calls"]))
-    return 30
+    return DEFAULT_EXA_MAX_CALLS
 
 
 def _iso(moment: datetime) -> str:

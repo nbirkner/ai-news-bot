@@ -16,8 +16,9 @@ read_candidates: 20
 read_full_text: true
 llm_rank: true
 theme_lede: true
-# Hard cap on Exa /search and /contents calls per run. EXA_MAX_CALLS overrides this.
-exa_max_calls: 30
+# Exa is off unless EXA_ENABLED=1. This caps /search and /contents calls per run.
+# EXA_MAX_CALLS overrides this. The default cap is 6.
+exa_max_calls: 6
 # Inference model only. The briefing text is a public issue, not a company briefing.
 # TOGETHER_API_KEY must be a personal key. Override the model with TOGETHER_MODEL.
 together_model: "zai-org/GLM-5.3"

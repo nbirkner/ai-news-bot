@@ -1,6 +1,9 @@
 """
 Mon/Wed/Fri AI briefing.
 
+RSS only. Exa runs only when EXA_ENABLED=1 (default off), capped by
+EXA_MAX_CALLS (default 6). This command does not read the weekly sources file.
+
 Prints the message. Posts to Slack only when DRY_RUN is off and both
 TOGETHER_API_KEY and SLACK_WEBHOOK_URL are set. A dry run never posts.
 

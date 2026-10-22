@@ -619,6 +619,9 @@ def _source_text(article: Article) -> str:
     full_text = getattr(article, "full_text", "") or ""
     if details:
         parts.append(details)
+    reflection = getattr(article, "reflection", "") or ""
+    if reflection:
+        parts.append(reflection)
     if full_text:
         parts.append(full_text)
     if article.content_preview:
@@ -781,6 +784,7 @@ def _item_payload(article: Article, index: int) -> dict:
         "url": article.url,
         "published": article.published_at.isoformat(),
         "details": getattr(article, "details", "") or "",
+        "reflection": getattr(article, "reflection", "") or "",
         "text": text[:4000],
     }
 
@@ -790,7 +794,8 @@ def _prompt(articles: list) -> str:
     return f"""You write a public AI news briefing for a general audience of people building with AI.
 
 Rules:
-- Use only the title, details, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text.
+- Use only facts from the provided public sources plus brief reflection. No invented facts.
+- Use only the title, details, reflection, and text for that item. Do not add facts, numbers, quotes, or names that are not in that text or its brief reflection.
 - headline: one specific claim, not a version number alone.
 - body: 2 to 3 sentences of concrete facts from that item's text. A body under 2 sentences is invalid. Keep prices, benchmark numbers, dates, and availability. If a benchmark comes from the company that built the model, label it company-reported, or vendor-reported on a vendor post. If the text cannot support 2 factual sentences, omit the item.
 - why_it_matters: one plain sentence for people building with AI. Interpretation is allowed. New facts are not. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million".
@@ -1055,6 +1060,7 @@ def _rank_prompt(articles: list, recent: list, limit: int, since=None, until=Non
     ]
     return f"""You rank and write one public AI news briefing for people building with AI.
 
+Use only facts from the provided public sources plus brief reflection. No invented facts.
 The bar for keeping a story: would a builder or an AI exec bring it up this week?
 Do not echo that bar, or the words "this week", in the published lede, headlines, or why-lines.
 {_window_note(since, until)}
@@ -1070,14 +1076,15 @@ Skip a note that only says new features or bug fixes.
 Skip stories that are already in the recent briefings unless the new piece is a real development.
 Do not return two items that are the same event from different outlets. Keep the primary document or the wire, and use the version whose text actually states the figures.
 Return between 4 and {limit} items when that many clear the bar. A federal exclusion or removal order clears the bar. A stated mega-round, revenue figure, or IPO path clears the bar. A security change that treats agents as insiders, or a breach with a stated scale, clears the bar. A frontier model with a stated price, size, or benchmark clears the bar. Include those ahead of a narrower product SDK or a small acquisition when both are in the candidates. Return fewer only when the window does not contain that many. Return an empty list when every candidate is noise. Never invent an item to fill the count.
-Public sources only. Do not mention a vendor's private customer list or unpublished revenue. Public revenue, ARR, funding, and IPO figures stay when that item's text states them. Do not add a name or number that is not in that item's text.
-A hard number stays only when it appears in that item's text. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press, or a Yahoo copy of that wire) over a roundup or a law-firm blog. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it, including on a vendor's own post.
+Public sources only. Do not mention a vendor's private customer list or unpublished revenue. Public revenue, ARR, funding, and IPO figures stay when that item's text states them. Do not add a name or number that is not in that item's text or its brief reflection.
+A hard number stays only when it appears in that item's text or its brief reflection. Prefer the lab's own post, the Federal Register, or a wire (Reuters, Bloomberg, the Financial Times, the Wall Street Journal, CNBC, the Associated Press, or a Yahoo copy of that wire) over a roundup or a law-firm blog. When a benchmark or accuracy figure comes from the company that built the model, write company-reported next to it, including on a vendor's own post.
 
 For each chosen item:
+Use only facts from the provided public sources plus brief reflection. No invented facts.
 - headline: a short rewritten sentence, under 12 words, with the spec or the number. Do not paste the page title. For a Federal Register removal order, do not paste the notice title. Write plain English that names the product, such as federal agencies must remove it from civilian systems, and end it with a period.
-- body: 2 to 3 sentences of prose from that item's text only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
+- body: 2 to 3 sentences of prose from that item's text and its brief reflection only. A body under 2 sentences is invalid. Keep prices, dates, benchmark numbers, and availability. Do not repeat a sentence. Do not paste a table, a markdown heading, or the raw page. Join every pair of dollar figures with a word such as and, to, or from. Never leave a month glued to the next dollar amount. If the text says annualized revenue was about $50 billion at the end of September and $70 billion is expected by year-end, write both figures that way. Do not write that a figure is "less than expected", a "shortfall", or "short of expectations" unless that item's text uses those words. If the text cannot support 2 factual sentences, omit the item.
 - why_it_matters: one sentence naming a concrete consequence (who has to change what). Do not restate a sentence from the body. Do not call revenue a shortfall. If the story is a product a reader may not know, say what it is. For a removal order that covers third-party products, name the product and say vendors must audit which products include it before a civilian agency can buy them. No filler. Do not write "worth a look", "a builder or an AI exec would bring up", or any other echo of the selection bar. Attribute a quote only to the person whose words that item's text quotes. Hayete Gallot is credited only with the words she wrote. The phrase about data and tools that could do serious harm is TechCrunch's, so attribute it to TechCrunch or leave it out. For MiniMax, keep "MiniMax says" when the text uses those words. In that why-line write "under a dollar per million tokens" when the token price is under a dollar, and do not write "frontier-lab" or "cents per million".
-Use only names, numbers, and quotes that appear in that item's text.
+Use only names, numbers, and quotes that appear in that item's text or its brief reflection.
 
 lede: one grammatical sentence that names the top 2 or 3 stories as noun phrases, such as a reported loss, a deal, and an order. Do not write "the top stories are" followed by a headline clause. No new facts. No hype. No em dashes.
 Do not use game-changer, unlock, delve, landscape, pivotal, or groundbreaking.
@@ -1170,7 +1177,8 @@ def _repair_prompt(prompt: str, payload) -> str:
     return prompt + f"""
 
 The previous draft was rejected: {detail}.
-Write the JSON again. Every body must be 2 to 3 complete sentences using only that item's text.
+Use only facts from the provided public sources plus brief reflection. No invented facts.
+Write the JSON again. Every body must be 2 to 3 complete sentences using only that item's text and its brief reflection.
 If an item cannot support 2 factual sentences, omit it.
 Do not stop after one sentence. Return JSON only.
 """

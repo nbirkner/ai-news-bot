@@ -6,8 +6,11 @@ and never commits to the site repo.
 
     python main_newsletter.py --dry-run --window-end 2026-10-19
 
-Reads TOGETHER_API_KEY (a personal key, not a company key) and EXA_API_KEY
-from the environment. Missing keys skip that source and still write ./out/.
+Reads TOGETHER_API_KEY (a personal key, not a company key) from the
+environment. The Monday run looks for sources/<YYYY-MM-DD>.json (the window
+end on the Pacific calendar) and uses it plus RSS. A missing or invalid
+file falls back to RSS only. Exa runs only when EXA_ENABLED=1, capped by
+EXA_MAX_CALLS (default 6). Missing keys still write ./out/.
 A date window end is 15:00 UTC on that Monday, Wednesday, or Friday.
 The window opens at the previous scheduled slot.
 """

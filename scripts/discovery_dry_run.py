@@ -1,6 +1,7 @@
 """Discovery dry run. No Together calls. No Slack calls.
 
-Reads public feeds and, when EXA_API_KEY is set, Exa. Fetches full text for
+Reads public feeds. Exa runs only when EXA_ENABLED=1 and EXA_API_KEY is set,
+with a per-run cap of EXA_MAX_CALLS (default 6). Fetches full text for
 the shortlist and prints the candidate list the ranker would see.
 
 From the repo root:
@@ -8,7 +9,8 @@ From the repo root:
   python3 scripts/discovery_dry_run.py --since 2026-10-16T15:00:00Z
   python3 scripts/discovery_dry_run.py --since 80h --expect tests/fixtures/window_2026_10_19_expected.txt
 
-LOOKBACK works the same way as --since. EXA_MAX_CALLS caps Exa calls (default 30).
+LOOKBACK works the same way as --since. EXA_MAX_CALLS caps Exa calls (default 6)
+and only applies when EXA_ENABLED=1.
 """
 import os
 import sys
