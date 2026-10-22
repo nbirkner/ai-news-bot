@@ -1,0 +1,110 @@
+[
+  {
+    "slug": "lost-in-the-middle",
+    "level": "Foundations",
+    "title": "Lost in the middle: why models miss details in huge prompts, and why RAG didn't die",
+    "brief": "Explain why a model misses details buried in a long prompt, and why retrieval did not make that problem go away. Cross-link the context window lesson by name."
+  },
+  {
+    "slug": "temperature-and-grounding",
+    "level": "Foundations",
+    "title": "Why turning temperature down only half-fixes hallucination, versus grounding with search or a database",
+    "brief": "Explain why a lower temperature only partly fixes hallucination, and what grounding with search or a database changes. Cross-link the hallucination lesson by name."
+  },
+  {
+    "slug": "online-versus-offline",
+    "level": "Foundations",
+    "title": "Online versus offline jobs: same model, two deployments",
+    "brief": "Chat wants first-token speed. A nightly batch wants cheap throughput. Same model, two deployments. Cross-link the shared versus dedicated lesson by name."
+  },
+  {
+    "slug": "consumer-versus-business",
+    "level": "Foundations",
+    "title": "Consumer versus business inference needs",
+    "brief": "Contrast a consumer chat product with a business deployment. Cross-link the end-to-end latency lesson by name."
+  },
+  {
+    "slug": "prefill-versus-decode",
+    "level": "Foundations",
+    "title": "Prefill versus decode, the whiteboard version",
+    "brief": "A Foundations refresher on prefill versus decode. The goodput lesson and the Splitwise lesson already cover the systems version. Cross-link those by name."
+  },
+  {
+    "slug": "banditspec",
+    "level": "Frontier",
+    "title": "BanditSpec: learning when to speculate",
+    "brief": "How a system learns when speculative decoding is worth it. Cross-link the adaptive draft length lesson by name. The hook should point back at that systems idea."
+  },
+  {
+    "slug": "dynamic-prefill-ratios",
+    "level": "Frontier",
+    "title": "Dynamic prefill/decode ratios",
+    "brief": "Hybrids that slide between combined and split serving as traffic shifts. Cross-link the Splitwise lesson by name."
+  },
+  {
+    "slug": "native-mtp-versus-eagle",
+    "level": "Frontier",
+    "title": "Native MTP versus a true EAGLE-3 head on the same model",
+    "brief": "Compare native multi-token prediction with a true EAGLE-3 head on the same model. Cross-link the native MTP lesson by name."
+  },
+  {
+    "slug": "effort-and-goodput",
+    "level": "Systems",
+    "title": "Effort and thinking budgets inside tool loops",
+    "brief": "How effort and thinking budgets inside tool loops map onto fleet goodput. Cross-link the reasoning tokens lesson and the goodput lesson by name."
+  },
+  {
+    "slug": "compaction-apis",
+    "level": "Systems",
+    "title": "Compaction APIs compared",
+    "brief": "Compare cache-safe compaction, encrypted compaction items, and checkpoint files. Cross-link the compaction economics lesson by name."
+  },
+  {
+    "slug": "memory-prompt-injection",
+    "level": "Systems",
+    "title": "Prompt injection into agent memory",
+    "brief": "Prompt injection into agent memory, and read-only memory for untrusted input. Cross-link the cross-session memory lesson by name."
+  },
+  {
+    "slug": "testing-handoffs",
+    "level": "Frontier",
+    "title": "Testing handoffs",
+    "brief": "Plant facts in worker runs and measure what survives the summary. Cross-link the multi-agent handoffs lesson by name."
+  },
+  {
+    "slug": "restart-cost",
+    "level": "Systems",
+    "title": "Restart cost as a metric",
+    "brief": "Restart cost, idempotency keys, and why doing the same side effect twice is dangerous. Cross-link the durable execution lesson by name."
+  },
+  {
+    "slug": "passk-versus-pass-at-k",
+    "level": "Foundations",
+    "title": "pass^k versus pass@k",
+    "brief": "Why consistency is harder than a run that worked once. Cross-link the agent evals lesson by name."
+  },
+  {
+    "slug": "tests-and-ab-tests",
+    "level": "Systems",
+    "title": "When can a test score replace an A/B test?",
+    "brief": "When a test score can stand in for an A/B test, and how that trust is earned per kind of change. Cross-link the production monitoring lesson by name."
+  },
+  {
+    "slug": "abort-rules",
+    "level": "Systems",
+    "title": "Abort rules in practice",
+    "brief": "Find the step where failing runs separate from winners. Cross-link the cost per success lesson by name."
+  },
+  {
+    "slug": "restart-or-continue",
+    "level": "Frontier",
+    "title": "Restart clean or continue?",
+    "brief": "What the strong model should see after a cheap model fails. Cross-link the model routing lesson by name."
+  },
+  {
+    "slug": "pause-distributions",
+    "level": "Systems",
+    "title": "Pause distributions",
+    "brief": "Read an agent's own gaps to pick a cache time to live. Cross-link the serving agent sessions lesson by name."
+  }
+]

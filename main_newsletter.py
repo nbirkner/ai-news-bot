@@ -7,6 +7,9 @@ Slack and it does not publish the site.
 
     python main_newsletter.py --dry-run --window-end 2026-10-19
     python main_newsletter.py --send --window-end 2026-10-19
+    python main_newsletter.py --mode lesson --dry-run --date 2026-10-27
+
+`--mode lesson` is a dry run only. It never sends, posts, or publishes.
 
 Reads TOGETHER_API_KEY (a personal key, not a company key) and EXA_API_KEY
 from the environment. A real send also reads RESEND_API_KEY and
@@ -24,6 +27,7 @@ import yaml
 
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
+from src.lesson import LessonBlocked, generate_lesson, pacific_today
 from src.newsletter import email_subject, render_email, render_mdx, render_plain
 from src.resend_send import (
     SendError,
@@ -107,10 +111,58 @@ def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retenti
     remember_issue(issue, state_dir / "recent_briefings.json", when=now)
 
 
+def run_lesson(argv) -> int:
+    """Draft the next lesson into ./out. Sending and publishing are hard-disabled."""
+    if "--send" in argv or "--post" in argv or "--publish" in argv:
+        print("Lesson mode never sends, posts, or publishes.", file=sys.stderr)
+        return 2
+    raw_date = _flag(argv, "--date")
+    if raw_date:
+        try:
+            datetime.strptime(raw_date, "%Y-%m-%d")
+        except ValueError:
+            print("--date must be YYYY-MM-DD", file=sys.stderr)
+            return 2
+        date = raw_date
+    else:
+        date = pacific_today()
+    config = yaml.safe_load(open("config.yaml"))
+    override = (os.environ.get("TOGETHER_MODEL") or "").strip()
+    model = override or (config.get("together_model") or "")
+    out = Path(os.environ.get("OUT_DIR") or "out")
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        lesson = generate_lesson(
+            date=date,
+            api_key=(os.environ.get("TOGETHER_API_KEY") or "").strip() or None,
+            model=model,
+        )
+    except LessonBlocked as exc:
+        blocked = out / f"{date}.blocked.txt"
+        blocked.write_text(exc.line + "\n")
+        print(exc.line)
+        print("Blocked. Not writing the lesson. Nothing was sent or published.", file=sys.stderr)
+        return 2
+    stem = f"{lesson['date']}-{lesson['slug']}"
+    (out / f"{stem}.mdx").write_text(lesson["markdown"])
+    (out / f"{stem}.html").write_text(lesson["html"])
+    (out / f"{stem}.txt").write_text(lesson["plain"])
+    print(f"Wrote {out / (stem + '.mdx')}", file=sys.stderr)
+    print(f"Wrote {out / (stem + '.html')}", file=sys.stderr)
+    print("Dry run: nothing was posted or sent.", file=sys.stderr)
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
-    if "--post" in argv:
-        print("main_newsletter.py does not post to Slack.", file=sys.stderr)
+    if "--post" in argv or "--publish" in argv:
+        print("main_newsletter.py does not post to Slack or publish the site.", file=sys.stderr)
+        return 2
+    mode = (_flag(argv, "--mode") or "news").strip().lower()
+    if mode == "lesson":
+        return run_lesson(argv)
+    if mode != "news":
+        print("--mode must be news or lesson.", file=sys.stderr)
         return 2
     raw_end = _flag(argv, "--window-end")
     if not raw_end:

@@ -1,0 +1,205 @@
+[
+  {
+    "title": "Next-token prediction, done extremely well, is how models absorb facts, code, and reasoning.",
+    "date": "2026-08-22",
+    "level": "Foundations",
+    "slug": "next-token-prediction",
+    "summary": "Chatbots are not giant search engines. They guess the next word, and getting very good at that turns out to require a lot of knowledge."
+  },
+  {
+    "title": "A context window is working memory for one request, not a filing cabinet of past chats.",
+    "date": "2026-08-22",
+    "level": "Foundations",
+    "slug": "context-window",
+    "summary": "Models read tokens, not words, and they can only see what fits on their desk for this one request."
+  },
+  {
+    "title": "Hallucination is pattern completion when the truth is not in the context or strongly in the weights.",
+    "date": "2026-08-23",
+    "level": "Foundations",
+    "slug": "hallucination",
+    "summary": "Why a model will confidently invent a citation, and what actually reduces it."
+  },
+  {
+    "title": "Training writes the weights; inference reads them on every request, and that is where the cost lives.",
+    "date": "2026-08-25",
+    "level": "Foundations",
+    "slug": "training-vs-inference",
+    "summary": "The gym versus game day: why almost every AI product conversation is really about inference."
+  },
+  {
+    "title": "Start on a shared token API, and move to dedicated GPUs only when the math or a latency promise forces it.",
+    "date": "2026-08-27",
+    "level": "Foundations",
+    "slug": "shared-vs-dedicated",
+    "summary": "Pay-per-token APIs versus running your own GPUs, and the moment the switch makes sense."
+  },
+  {
+    "title": "TTFT is the wait for the first word, TPS is the rest of the stream, and P99 is the speed number to quote.",
+    "date": "2026-08-29",
+    "level": "Foundations",
+    "slug": "ttft-tps-p99",
+    "summary": "The two numbers behind 'this chatbot feels fast,' and why the average lies."
+  },
+  {
+    "title": "If the GPU is fast and the app still crawls, the missing time is queue, network, or hops, not the model.",
+    "date": "2026-08-30",
+    "level": "Foundations",
+    "slug": "end-to-end-latency",
+    "summary": "On-GPU time versus what the user actually waits through, and where the missing milliseconds hide."
+  },
+  {
+    "title": "On MoE decode, attention and experts fail different SLOs and want different GPU pools.",
+    "date": "2026-09-01",
+    "level": "Frontier",
+    "slug": "attention-ffn-disaggregation",
+    "summary": "Why the biggest open models are starting to split one model across two kinds of machines."
+  },
+  {
+    "title": "Speculative decoding pays only when you measure it at real concurrency and on the actual task mix.",
+    "date": "2026-09-03",
+    "level": "Systems",
+    "slug": "speculative-decoding",
+    "summary": "A clever trick that makes models answer faster, and why it can backfire when the servers get busy."
+  },
+  {
+    "title": "Treat draft length as a live control; a fixed max draft burns compute once the batch is full.",
+    "date": "2026-09-05",
+    "level": "Frontier",
+    "slug": "adaptive-draft-length",
+    "summary": "Speculative decoding with a fixed setting is tuned for an empty server. The fix is to adjust it on the fly."
+  },
+  {
+    "title": "Buy GPU capacity in goodput, requests that clear both TTFT and TPOT, not in raw tokens per second.",
+    "date": "2026-09-08",
+    "level": "Systems",
+    "slug": "goodput",
+    "summary": "Throughput counts work done. Goodput counts work done fast enough to matter."
+  },
+  {
+    "title": "Sell the tier as first claim on capacity, then enforce a fair token budget inside that tier.",
+    "date": "2026-09-10",
+    "level": "Systems",
+    "slug": "fair-scheduling",
+    "summary": "When many customers share one GPU, one customer's burst becomes everyone's slowdown. Here's how fair sharing works."
+  },
+  {
+    "title": "Continuous batching keeps the GPU full; prefix cache only hits if the shared prompt stays identical.",
+    "date": "2026-09-12",
+    "level": "Systems",
+    "slug": "continuous-batching-prefix-cache",
+    "summary": "Two everyday tricks that make AI serving cheap, and the tiny mistake that breaks the second one."
+  },
+  {
+    "title": "Read num_key_value_heads before treating GQA as a capacity win.",
+    "date": "2026-09-17",
+    "level": "Systems",
+    "slug": "gqa-kv-heads",
+    "summary": "One number on a model card tells you how much memory every conversation costs. Here's how to read it."
+  },
+  {
+    "title": "Splitwise and DistServe show why prefill and decode need separate pools (and often separate GPU SKUs), with concrete cost/throughput gains and when colocation still wins.",
+    "date": "2026-09-19",
+    "level": "Systems",
+    "slug": "splitwise-distserve",
+    "summary": "Reading the prompt and writing the answer want different machines. Two papers showed how much splitting them saves."
+  },
+  {
+    "title": "Jeff Dean: Exciting Trends in ML (Rice 2024 watch companion)",
+    "date": "2026-09-20",
+    "level": "Foundations",
+    "slug": "jeff-dean-trends-in-ml",
+    "summary": "A viewing guide to Jeff Dean's 72-minute Rice lecture: scale, specialized chips, the transformer, and what Gemini was built on."
+  },
+  {
+    "title": "Pick the speculative proposer from traffic shape and packaging cost; score tokens/sec under your concurrency, not paper acceptance.",
+    "date": "2026-09-22",
+    "level": "Frontier",
+    "slug": "choosing-a-speculative-proposer",
+    "summary": "Three ways to guess ahead in speculative decoding, and how to choose between them."
+  },
+  {
+    "title": "Native MTP vs bolt-on EAGLE/Medusa for product ownership",
+    "date": "2026-09-24",
+    "level": "Frontier",
+    "slug": "native-mtp-vs-bolt-on",
+    "summary": "Some models are trained with their own built-in guesser. Others need one bolted on. That choice decides who owns the upkeep."
+  },
+  {
+    "title": "Reasoning decode economics: thinking tokens, relaxed acceptance, SLAs",
+    "date": "2026-09-26",
+    "level": "Frontier",
+    "slug": "reasoning-decode-economics",
+    "summary": "Reasoning models think before they answer. You don't see most of that thinking, but you still pay for it and wait for it."
+  },
+  {
+    "title": "Interleaved thinking: effort knobs vs tool-loop input tax",
+    "date": "2026-09-29",
+    "level": "Frontier",
+    "slug": "interleaved-thinking",
+    "summary": "When an AI agent thinks between every tool call, yesterday's thinking becomes tomorrow's input, and the bill compounds."
+  },
+  {
+    "title": "Agent loop compaction economics (cache thrash vs prune)",
+    "date": "2026-10-01",
+    "level": "Systems",
+    "slug": "compaction-economics",
+    "summary": "Summarizing a long AI conversation to save money can cost more than keeping it all. Here's why."
+  },
+  {
+    "title": "Cross-session memory: offload beats a longer window",
+    "date": "2026-10-03",
+    "level": "Systems",
+    "slug": "cross-session-memory",
+    "summary": "Every new AI session starts with an empty desk. The trick is leaving good notes for next time."
+  },
+  {
+    "title": "Multi-agent handoff budgets (1-2k return summary vs shared file store)",
+    "date": "2026-10-06",
+    "level": "Frontier",
+    "slug": "multi-agent-handoffs",
+    "summary": "When one AI agent hands work to another, what should it pass along? About two thousand tokens and a pile of file paths."
+  },
+  {
+    "title": "A checkpoint saves state; durable execution also restarts the run.",
+    "date": "2026-10-10",
+    "level": "Systems",
+    "slug": "durable-execution",
+    "summary": "How long-running AI agents survive crashes, deploys and three-day waits for a human to click approve."
+  },
+  {
+    "title": "Score environment state and process on separate axes; a confident closer is not a DB assert.",
+    "date": "2026-10-13",
+    "level": "Systems",
+    "slug": "agent-evals-outcome-vs-process",
+    "summary": "AI agents sometimes say 'done!' when nothing happened. Here's how to test whether the work really got done."
+  },
+  {
+    "title": "Production agent monitoring vs offline evals. The offline bank catches known breaks; step monitors, deterministic checks, human reads, and random A/B audits catch drift, and eval-only shipping is earned per change class",
+    "date": "2026-10-15",
+    "level": "Frontier",
+    "slug": "production-monitoring",
+    "summary": "A test suite tells you an AI agent worked on launch day. Here's how teams find out it still works three weeks later."
+  },
+  {
+    "title": "Agent cost and latency SLOs. Price on cost per success with failures counted; early abort is the biggest margin lever",
+    "date": "2026-10-17",
+    "level": "Frontier",
+    "slug": "agent-cost-per-success",
+    "summary": "The cheapest AI model per token isn't always the cheapest per finished job. And the biggest savings come from giving up early."
+  },
+  {
+    "title": "Model routing and cascades for agents (price the switch; route at phase boundaries; judge on cost per success)",
+    "date": "2026-10-20",
+    "level": "Frontier",
+    "slug": "model-routing",
+    "summary": "Sending easy work to cheap models and hard work to strong ones sounds simple. Inside an agent, switching models has a hidden price."
+  },
+  {
+    "title": "Serving agent sessions: keep the KV cache alive across tool and human gaps, route turns back to the warm replica, and price cache TTL by your pause distribution",
+    "date": "2026-10-22",
+    "level": "Frontier",
+    "slug": "serving-agent-sessions",
+    "summary": "AI agents pause constantly for tools and humans. Whether the model's memory survives those pauses decides the bill."
+  }
+]
