@@ -34,6 +34,20 @@ def previous_mwf_slot(end: datetime) -> datetime:
     return end - timedelta(hours=80)
 
 
+def weekly_window_start(end: datetime) -> datetime:
+    """Seven days before `end`. The Monday letter covers the previous Monday through this one."""
+    return _utc(end) - timedelta(days=7)
+
+
+def pacific_monday(moment: datetime | None = None) -> str:
+    """Monday of the America/Los_Angeles week that contains `moment`, as YYYY-MM-DD."""
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo("America/Los_Angeles")
+    local = (moment or datetime.now(zone)).astimezone(zone)
+    monday = local - timedelta(days=local.weekday())
+    return monday.strftime("%Y-%m-%d")
+
+
 def parse_window_end(raw: str) -> datetime:
     text = (raw or "").strip()
     if not text:

@@ -1,19 +1,27 @@
 name: AI briefing
 
-# Slack posting and email sending are off until a newsletter dry run looks right.
-# The schedule returns when that send path is turned on. Until then this
-# workflow only writes ./out and uploads it. main_newsletter.py never sends.
+# Monday newsletter at 9:00 America/Los_Angeles. Two UTC crons cover daylight
+# saving; the guard continues only when the Pacific hour is 9.
+# Slack posting and the site publish stay off. This workflow does not post
+# and it does not push the MDX anywhere.
 on:
+  schedule:
+    - cron: "0 16 * * 1"
+    - cron: "0 17 * * 1"
   workflow_dispatch:
     inputs:
       window_end:
-        description: "Window end date (YYYY-MM-DD). 15:00 UTC that day."
+        description: "Window end (YYYY-MM-DD), 15:00 UTC that day. Blank uses the Monday of the current America/Los_Angeles week."
         type: string
-        default: "2026-10-19"
+        default: ""
       dry_run:
-        description: "Always a dry run. This input does not enable sending."
+        description: "Write the issue and do not send. Uncheck to send."
         type: boolean
         default: true
+      test_to:
+        description: "Send one email to this address instead of the broadcast. Ignored when dry_run is checked."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -26,11 +34,31 @@ jobs:
   newsletter:
     runs-on: ubuntu-latest
     steps:
+      - name: Pacific 9am guard
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run. The 9:00 America/Los_Angeles guard applies to the schedule only."
+            exit 0
+          fi
+          hour=$(TZ=America/Los_Angeles date +%H)
+          echo "America/Los_Angeles hour is ${hour}"
+          if [ "$hour" = "09" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping. The Monday send runs only when the America/Los_Angeles hour is 9."
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.proceed == 'true'
         with:
           token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
 
       - name: Restore briefing state
+        if: steps.guard.outputs.proceed == 'true'
         uses: actions/cache/restore@v4
         with:
           path: state
@@ -39,31 +67,75 @@ jobs:
             briefing-state-
 
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.proceed == 'true'
         with:
           python-version: "3.11"
           cache: "pip"
 
       - run: pip install -r requirements.txt
+        if: steps.guard.outputs.proceed == 'true'
 
-      - name: Newsletter dry run
+      - name: Resolve Monday window
+        id: window
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WINDOW_END: ${{ inputs.window_end }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            end=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          elif [ -n "$WINDOW_END" ]; then
+            end="$WINDOW_END"
+          else
+            end=$(python3 -c "from src.issue_run import pacific_monday; print(pacific_monday())")
+          fi
+          if ! [[ "$end" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "Window end must be YYYY-MM-DD" >&2
+            exit 2
+          fi
+          start=$(python3 - "$end" <<'PY'
+          import sys
+          from src.issue_run import parse_window_end, weekly_window_start
+          print(weekly_window_start(parse_window_end(sys.argv[1])).strftime("%Y-%m-%dT%H:%M:%SZ"))
+          PY
+          )
+          echo "Window end ${end}, start ${start}"
+          echo "end=$end" >> "$GITHUB_OUTPUT"
+          echo "start=$start" >> "$GITHUB_OUTPUT"
+
+      - name: Newsletter
+        id: newsletter
+        if: steps.guard.outputs.proceed == 'true'
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '30' }}
           TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}
-          DRY_RUN: "1"
-        run: python main_newsletter.py --dry-run --window-end "${{ inputs.window_end }}"
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_AUDIENCE_ID: ${{ secrets.RESEND_AUDIENCE_ID }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          TEST_TO: ${{ github.event_name == 'workflow_dispatch' && inputs.test_to || '' }}
+        run: |
+          set -euo pipefail
+          args=(main_newsletter.py --window-end "${{ steps.window.outputs.end }}" --window-start "${{ steps.window.outputs.start }}")
+          case "${DRY_RUN}" in
+            1|true|True|yes|YES) args+=(--dry-run) ;;
+            *) args+=(--send) ;;
+          esac
+          python "${args[@]}"
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.guard.outputs.proceed == 'true'
         with:
           name: newsletter-out
           path: out/
           if-no-files-found: ignore
 
-      # Kept off. A dry run must not refresh the cache as if it had published.
+      # Only a real broadcast updates the cache. A dry run, a test email,
+      # an empty issue, and a failed send leave it untouched.
       - name: Save briefing state
-        if: false
+        if: steps.newsletter.outputs.sent == 'true'
         uses: actions/cache/save@v4
         with:
           path: state

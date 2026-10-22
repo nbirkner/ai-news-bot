@@ -3,7 +3,8 @@
 Item drops (generic one-liners, non-public URLs) remove a story.
 Issue blocks (Together-internal copy, unsafe text, an empty issue,
 a duplicate, a schema failure, a second send in the same slot) stop
-the whole issue. The newsletter command never sends either way.
+the whole issue. A dry run never sends. A real send stops on these blocks
+and on an issue date that was already broadcast.
 """
 
 import re

@@ -1,6 +1,6 @@
 # AI briefing
 
-One public AI news issue, generated once, then rendered as site MDX and as email HTML. Slack uses the same issue object; posting to Slack is not turned on yet.
+One public AI news issue, generated once, then rendered as site MDX and as email HTML. The Monday issue is broadcast with Resend. Slack posting and the site publish are separate and are not turned on.
 
 The copy is a general briefing for people building with AI. It does not take a Together product, customer, revenue, or competitor angle, and it does not use internal names. Sources are public pages with public URLs.
 
@@ -32,7 +32,19 @@ Each run writes:
 
 If a guardrail blocks the issue, the command writes `out/YYYY-MM-DD.blocked.txt` instead of the MDX and HTML, and exits 2.
 
-Without `TOGETHER_API_KEY` the run still builds an issue from the article text and logs `llm_calls: 0`. Without `EXA_API_KEY` it uses the feeds only. `RESEND_API_KEY` and `RESEND_AUDIENCE_ID` are not read by this command.
+Without `TOGETHER_API_KEY` the run still builds an issue from the article text and logs `llm_calls: 0`. Without `EXA_API_KEY` it uses the feeds only. The dry run does not read `RESEND_API_KEY` or `RESEND_AUDIENCE_ID`.
+
+### Weekly send
+
+Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`. A guard step continues only when the current hour in America/Los_Angeles is 9, so daylight saving does not move the send off 9:00.
+
+The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
+
+`--send` creates a Resend broadcast to the audience in `RESEND_AUDIENCE_ID`, from `Niki Birkner <ainews@nikibirkner.com>`. The subject is `email_subject()` (`AI News, October 19, 2026` for that issue). The HTML is `render_email(broadcast=True)` and the text is `render_plain(broadcast=True)`. Resend is then told to send that broadcast, using `RESEND_API_KEY`.
+
+The send does not run when the issue has no stories, or when that issue date is already in `state/sent_issues.json`. The seen-article list, the recent briefings, and that sent-date file are written only after Resend accepts the send. The Actions cache is saved only then. A dry run, a test email, an empty issue, and a failed send leave the cache as it was.
+
+Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE_REPO_TOKEN` are not used by this workflow.
 
 ### Cost lines in the usage log
 
@@ -50,9 +62,8 @@ Publishing stops, and this dry run writes a blocked file, when:
 - the issue is empty or too short, or it repeats the last issue's URLs
 - the text is unsafe or contains a secret
 - the model reply fails the issue schema (headline, body of at least three sentences, why it matters, integer index)
-- a second send would land in the same Monday / Wednesday / Friday slot (checked only on a real send; this command never sends)
 
-Stories that fail the one-liner or URL check are dropped. The other checks block the whole issue.
+Stories that fail the one-liner or URL check are dropped. The other checks block the whole issue. A real send also refuses an issue date already listed in `state/sent_issues.json`. A dry run does not write that file.
 
 ## Site changes
 
@@ -93,6 +104,8 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 | `TOGETHER_API_KEY` | Niki's **personal** Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). Not a Together company key. |
 | `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
 | `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) |
+| `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Monday send reads this. A dry run does not. |
+| `RESEND_AUDIENCE_ID` | The Resend audience (segment) id the broadcast is sent to. Same secret the site signup uses. |
 
 `EXA_API_KEY` is optional. Without it the job uses the feeds only and says so in the log. With it, each run also searches Exa for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
 
@@ -100,7 +113,7 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 
 Optional: repository variable `TOGETHER_MODEL` overrides the model in `config.yaml`.
 
-No personal access token is required. Seen URLs and the last few briefings are stored in the Actions cache (`state/`), not in a commit on every run. The cache is written only after a real post. A dry run does not update it. If the cache is cold, the files committed in `state/` are the seed, and the lookback never exceeds 7 days.
+No personal access token is required. Seen URLs, sent issue dates, and the last few briefings are stored in the Actions cache (`state/`), not in a commit on every run. The cache is written only after a successful broadcast. A dry run does not update it. If the cache is cold, the files committed in `state/` are the seed, and the lookback never exceeds 7 days.
 
 ### 4. Enable the workflow
 
@@ -108,14 +121,15 @@ On a new or forked repo, GitHub leaves Actions off until someone turns them on. 
 
 ### 5. Dry-run before the first real post
 
-**Actions → AI briefing → Run workflow**, leave **dry_run** checked, and run it. The log prints the briefing. Nothing is posted, and the seen-article list is not updated.
+**Actions → AI briefing → Run workflow**, leave **dry_run** checked, and run it. The log prints the issue and the artifact has the HTML. Nothing is sent, and the seen-article list is not updated.
 
-The workflow dispatch form also has:
+The dispatch form also has:
 
-- **since**: dry run only. An ISO start such as `2026-10-16T15:00:00Z`, or a span such as `80h`. This is `LOOKBACK`. It is ignored on a live post.
-- **expect_file**: dry run only. A path in the repo, one expected headline per line. The log says which of those headlines were found, and which of the found ones were ranked into the briefing.
+- **window_end**: `YYYY-MM-DD`. The window ends at 15:00 UTC that day. Leave it blank to use the Monday of the current America/Los_Angeles week.
+- **dry_run**: checked by default. A manual run sends only when this is unchecked.
+- **test_to**: an email address. When dry_run is unchecked, the run sends one email to that address via Resend `/emails` instead of the broadcast. Unsubscribe in that copy points at the archive, because Resend fills `{{{RESEND_UNSUBSCRIBE_URL}}}` on a broadcast only. A test email does not mark the issue sent and it does not save the cache. The field is ignored while dry_run is checked.
 
-When the log looks right, run the workflow again with **dry_run** unchecked. That post is the first live message. After that, the schedule takes over.
+The Monday schedule sends the broadcast on its own. Uncheck **dry_run** only when a manual run should send. That send is the email, not a Slack post and not a site commit.
 
 Local equivalent, which also never posts:
 
@@ -139,18 +153,18 @@ Without `EXA_API_KEY` the script still prints feed candidates and logs `Exa call
 
 | | |
 | --- | --- |
-| Days | Monday, Wednesday, Friday |
-| Clock | 15:00 UTC |
-| Pacific daylight (roughly March to November) | 8:00 AM |
-| Pacific standard | 7:00 AM |
+| Day | Monday |
+| Clock | 9:00 AM America/Los_Angeles, year-round |
+| UTC crons | `0 16 * * 1` and `0 17 * * 1` |
+| Guard | Continue only when the America/Los_Angeles hour is 9 |
 
-GitHub's scheduler is UTC and does not follow daylight saving, so winter runs are an hour earlier on the Pacific clock.
+GitHub's scheduler is UTC and does not follow daylight saving. The two crons fire an hour apart, and the guard drops the one that is not 9:00 on the Pacific clock. A manual run is not subject to the guard.
 
-Each run covers items published since the previous successful post. The Monday run therefore includes the weekend. The first run, or a run with no saved timestamp, looks back 80 hours. A long outage never looks back more than 7 days. `--since` / `LOOKBACK` replaces that window for a dry run.
+The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 
 ## What gets posted
 
-The Monday / Wednesday / Friday schedule is paused. The workflow only runs when someone starts it, and it runs `main_newsletter.py --dry-run`. Nothing is sent.
+The Monday workflow sends the email. It does not post to Slack and it does not commit the MDX to the site. A manual run with **dry_run** checked sends nothing.
 
 A lede, then four to seven stories when the window supports it, and fewer when it does not. Stories are ranked for people building with AI, with the last five issues in mind so a repeat link is skipped. Slack, the site, and the email are three renders of that same issue.
 
@@ -179,7 +193,7 @@ After dedupe, the top 15 candidates (configurable with `read_candidates`) are re
 
 ## Memory
 
-`state/recent_briefings.json` keeps the titles and links of the last five real posts. A dry run does not write it. On GitHub Actions the file lives in the Actions cache together with `state/seen_articles.json` and `state/last_briefing.json`, so a routine post does not open a commit.
+`state/recent_briefings.json` keeps the titles and links of the last five real sends. `state/sent_issues.json` records each issue date that was broadcast, so the same date is not sent twice. A dry run and a test email do not write these files. On GitHub Actions they live in the Actions cache together with `state/seen_articles.json` and `state/last_briefing.json`. The cache is saved only after a successful broadcast. A routine send does not open a commit.
 
 ## Tests
 
@@ -198,6 +212,6 @@ Tests do not call Slack, Together, or Exa. HTTP is mocked. Pull requests and pus
 3. `/newsletter/[slug]`, one page per issue that renders the MDX. The email's "Read this on the web" link points at `https://nikibirkner.com/ai-news/YYYY-MM-DD`.
 4. A signup box on the index and on the home page, matching the existing form styling if the site already has inputs, otherwise a single email field and a button in the site's current type.
 5. A small Vercel function, not a client-side call to Resend. `POST /api/newsletter/subscribe` with `{ email }` creates a Resend contact in `RESEND_AUDIENCE_ID` as unsubscribed and emails a confirm link. `GET /api/newsletter/confirm?token=...` sets the contact to subscribed. That is the double opt-in. The function reads `RESEND_API_KEY` from Vercel env. The browser never sees the key.
-6. Resend domain verification for `nikibirkner.com` (SPF, DKIM, and the return-path Resend shows in the dashboard) before any broadcast from `newsletter@nikibirkner.com`. The dry run does not send, so this can wait until a send command exists.
+6. Resend domain verification for `nikibirkner.com` (SPF, DKIM, and the return-path Resend shows in the dashboard) for mail from `ainews@nikibirkner.com`.
 
-When a send path is added later, it should broadcast the same HTML this command writes, to that audience, and commit the same MDX to `src/content/newsletter/` with a GitHub token that can push to `nbirkner/site`. It must keep using the personal `TOGETHER_API_KEY` only.
+The Monday send broadcasts the HTML this command writes. It does not commit the MDX to `src/content/newsletter/`. That publish step stays off until it is approved on its own. The model credential remains the personal `TOGETHER_API_KEY` only.
