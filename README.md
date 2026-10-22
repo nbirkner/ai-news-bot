@@ -46,6 +46,32 @@ The send does not run when the issue has no stories, or when that issue date is 
 
 Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE_REPO_TOKEN` are not used by this workflow.
 
+## AI Lessons
+
+One evergreen lesson a week, separate from the Monday / Wednesday / Friday news issue. The command picks the next unpublished topic from `lessons/queue.json`, opens public sources, and drafts from those sources plus a brief reflection. It does not invent facts. Prior lessons in `lessons/prior.json` are there so a draft can cross-link by name.
+
+```bash
+python3 main_newsletter.py --mode lesson --dry-run --date 2026-10-27
+```
+
+`--send`, `--post`, and `--publish` are refused. The command never calls Resend, never posts to Slack, and never writes the site repo. A missing key, fewer than two opened sources, a research failure, or a draft that breaks the format rules writes `out/YYYY-MM-DD.blocked.txt` containing only `BLOCKED: <reason>` and does not write the lesson.
+
+A valid run writes:
+
+| File | What |
+| --- | --- |
+| `out/YYYY-MM-DD-slug.mdx` | Frontmatter `title`, `date`, `level` (`Foundations`, `Systems`, or `Frontier`), `slug`, `summary`, then the lesson |
+| `out/YYYY-MM-DD-slug.html` | The same lesson in the news email template. The title is `AI Lessons, October 27, 2026` |
+| `out/YYYY-MM-DD-slug.txt` | Plain text of that letter |
+
+The lesson body is a hook, how it works, the numbers, an analogy, Try this, Use it at dinner, and 2 to 5 source links. 800 to 1,200 words. No em dashes, and no career, author, employer, bot, curriculum, or day-number framing.
+
+`lessons/published.json` lists slugs already used. A dry run does not add to it. After the queue is empty, the run is `BLOCKED` until a human approves new topics.
+
+### Tuesday dry run
+
+Tuesdays at 9:00 AM America/Los_Angeles. `.github/workflows/lessons.yml` runs two UTC crons, `0 16 * * 2` and `0 17 * * 2`. A guard step continues only when the current hour in America/Los_Angeles is 9. The job always passes `--dry-run`. It does not send, post, or publish.
+
 ### Cost lines in the usage log
 
 Together GLM-5.3 (`zai-org/GLM-5.3`), from [together.ai/pricing](https://www.together.ai/pricing) on 19 Oct 2026: **$1.40 / 1M input tokens**, **$4.40 / 1M output tokens**. The log multiplies the token totals by those rates and by 13 for a Monday / Wednesday / Friday month.
