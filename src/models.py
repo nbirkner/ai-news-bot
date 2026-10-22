@@ -14,6 +14,7 @@ class Article:
     source_priority: int = 5  # lower wins when two sources cover the same story
     full_text: str = ""
     details: str = ""
+    reflection: str = ""  # optional note from the weekly sources file
 
 
 @dataclass

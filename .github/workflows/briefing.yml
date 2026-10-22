@@ -110,7 +110,9 @@ jobs:
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-          EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '30' }}
+          # Exa stays off unless a repository variable sets EXA_ENABLED to 1.
+          EXA_ENABLED: ${{ vars.EXA_ENABLED || '0' }}
+          EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '6' }}
           TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_AUDIENCE_ID: ${{ secrets.RESEND_AUDIENCE_ID }}

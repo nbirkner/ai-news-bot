@@ -496,7 +496,9 @@ def test_live_post_remembers_titles_and_keeps_five(tmp_path):
     assert "https://example.com/5" in rows[-1]["items"][0]["url"]
 
 
-def test_prepare_falls_back_when_exa_errors(tmp_path):
+def test_prepare_falls_back_when_exa_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXA_ENABLED", "1")
+    monkeypatch.delenv("EXA_MAX_CALLS", raising=False)
     feed_article = _load_window()[0]
 
     def fetcher(config, since, now):
@@ -534,7 +536,7 @@ def test_config_and_workflow_name_the_new_sources():
     assert config["together_model"] == "zai-org/GLM-5.3"
     assert config["llm_rank"] is True
     assert config["read_candidates"] == 20
-    assert config["exa_max_calls"] == 30
+    assert config["exa_max_calls"] == 6
     workflow = Path(".github/workflows/briefing.yml").read_text()
     assert "EXA_API_KEY" in workflow
     assert "EXA_MAX_CALLS" in workflow

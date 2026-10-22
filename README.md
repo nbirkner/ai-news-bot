@@ -13,13 +13,33 @@ This command never posts to Slack, never calls Resend, and never commits to `nbi
 ```bash
 python3 -m pip install -r requirements.txt
 export TOGETHER_API_KEY=...   # personal key, not a company key
-export EXA_API_KEY=...
 python3 main_newsletter.py --dry-run --window-end 2026-10-12
 python3 main_newsletter.py --dry-run --window-end 2026-10-16
 python3 main_newsletter.py --dry-run --window-end 2026-10-19
 ```
 
 A date means 15:00 UTC on that day (the Monday / Wednesday / Friday slot). The window opens at the previous slot, so `--window-end 2026-10-19` covers Friday 16 Oct 15:00 UTC through Monday 19 Oct 15:00 UTC.
+
+### Weekly sources file
+
+The Monday newsletter (Monday 9 AM PT) looks first for a committed file, `sources/<YYYY-MM-DD>.json`. The date is the window end on the Pacific calendar, so that Monday run reads `sources/2026-10-19.json` when `--window-end` is `2026-10-19`. The schema and an example are in [`sources/README.md`](sources/README.md).
+
+The file is a JSON list. Each item is an object with this schema:
+
+| Field | Required | Value |
+| --- | --- | --- |
+| `title` | yes | non-empty string |
+| `url` | yes | absolute `http` or `https` URL |
+| `source` | yes | non-empty string, the publication name |
+| `published` | yes | ISO-8601 date (`YYYY-MM-DD`) or date-time (`YYYY-MM-DDThh:mm:ssZ`, or the same form with a numeric offset) |
+| `summary` | yes | non-empty string, the public facts |
+| `reflection` | no | string. A short note on the story. Omit the field when there is none. |
+
+Other fields are ignored. If any item is invalid, the whole file is rejected. An empty list is valid and adds no stories.
+
+When the file is present and valid, those items are candidate stories and RSS is still read. Ranking and writing still go through the model. When the file is missing or invalid, the run uses RSS only and says so in the log. Mon/Wed/Fri briefing runs (`main_briefing.py`) do not read this file. They use RSS only.
+
+Exa is off unless `EXA_ENABLED=1`. With that set, and with `EXA_API_KEY` present, Exa search and contents share one per-run cap, `EXA_MAX_CALLS`, default **6**.
 
 Each run writes:
 
@@ -32,7 +52,7 @@ Each run writes:
 
 If a guardrail blocks the issue, the command writes `out/YYYY-MM-DD.blocked.txt` instead of the MDX and HTML, and exits 2.
 
-Without `TOGETHER_API_KEY` the run still builds an issue from the article text and logs `llm_calls: 0`. Without `EXA_API_KEY` it uses the feeds only. The dry run does not read `RESEND_API_KEY` or `RESEND_AUDIENCE_ID`.
+Without `TOGETHER_API_KEY` the run still builds an issue from the article text and logs `llm_calls: 0`. Exa stays off unless `EXA_ENABLED=1`. A missing weekly sources file, or an invalid one, uses the feeds only. The dry run does not read `RESEND_API_KEY` or `RESEND_AUDIENCE_ID`.
 
 ### Weekly send
 
@@ -75,7 +95,7 @@ If nothing important landed since the previous run, it posts a one-line quiet no
 
 Ranking and the write-up use Together. The default model is `zai-org/GLM-5.3` (structured output, strongest general instruct model on Together as of October 2026). Set `TOGETHER_MODEL` to override it. `meta-llama/Llama-3.3-70B-Instruct-Turbo` is a cheaper fallback. `TOGETHER_API_KEY` is the only model credential.
 
-Every number, quote, and proper name in the lede and in each item has to appear in that item's source text (full text when we have it, otherwise the excerpt). A paraphrase can use different verbs. A figure, name, or quotation that is not in the source is dropped and that sentence falls back to the headline or a generic builder note.
+Every number, quote, and proper name in the lede and in each item has to appear in that item's source text (full text when we have it, otherwise the excerpt) or in its brief reflection. A paraphrase can use different verbs. A figure, name, or quotation that is not in the source or the reflection is dropped and that sentence falls back to the headline or a generic builder note. The writing prompt tells the model to use only facts from the provided public sources plus brief reflection, and not to invent facts.
 
 ## Setup
 
@@ -103,13 +123,13 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 | --- | --- |
 | `TOGETHER_API_KEY` | Niki's **personal** Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). Not a Together company key. |
 | `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
-| `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) |
+| `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys). Used only when `EXA_ENABLED=1`. |
 | `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Monday send reads this. A dry run does not. |
 | `RESEND_AUDIENCE_ID` | The Resend audience (segment) id the broadcast is sent to. Same secret the site signup uses. |
 
-`EXA_API_KEY` is optional. Without it the job uses the feeds only and says so in the log. With it, each run also searches Exa for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
+`EXA_API_KEY` is optional. Exa is off unless the environment variable `EXA_ENABLED` is `1` (the workflow passes the `EXA_ENABLED` repository variable, default `0`). The Monday newsletter otherwise uses `sources/<YYYY-MM-DD>.json` plus RSS, and falls back to RSS when that file is missing or invalid. Mon/Wed/Fri briefings use RSS only. With Exa enabled, each run also searches for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
 
-**Call cap.** Exa `/search` and `/contents` calls share one hard cap, default **30** per run. The log line is `Exa calls: N/30`. Override it with the `EXA_MAX_CALLS` environment variable, or with a repository variable of the same name (the workflow passes that variable through). If Exa errors or the account runs out of credits, the run keeps whatever Exa already returned and continues on the feeds.
+**Call cap.** When Exa is on, `/search` and `/contents` calls share one hard cap, default **6** per run. The log line is `Exa calls: N/6`. Override it with the `EXA_MAX_CALLS` environment variable, or with a repository variable of the same name (the workflow passes that variable through, default `6`). If Exa errors or the account runs out of credits, the run keeps whatever Exa already returned and continues on the feeds and the weekly sources file.
 
 Optional: repository variable `TOGETHER_MODEL` overrides the model in `config.yaml`.
 
@@ -140,14 +160,14 @@ python3 dry_run.py --since 2026-10-16T15:00:00Z --expect tests/fixtures/window_2
 
 `DRY_RUN=1` or `--dry-run` on `python3 main_briefing.py` does the same thing. `LOOKBACK` is the same override as `--since`. A dry run ignores `SLACK_WEBHOOK_URL` even if it is set.
 
-Discovery only (feeds, Exa, full text, and the shortlist the ranker would see). No Together call and no Slack call:
+Discovery only (feeds, optional Exa, full text, and the shortlist the ranker would see). No Together call and no Slack call. This script does not read the weekly sources file.
 
 ```bash
-EXA_API_KEY=your-key python3 scripts/discovery_dry_run.py --since 2026-10-16T15:00:00Z
-EXA_API_KEY=your-key python3 scripts/discovery_dry_run.py --since 80h --expect tests/fixtures/window_2026_10_19_expected.txt
+python3 scripts/discovery_dry_run.py --since 2026-10-16T15:00:00Z
+EXA_ENABLED=1 EXA_API_KEY=your-key python3 scripts/discovery_dry_run.py --since 80h --expect tests/fixtures/window_2026_10_19_expected.txt
 ```
 
-Without `EXA_API_KEY` the script still prints feed candidates and logs `Exa calls: 0/30`.
+Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa calls: 0/6`.
 
 ## Schedule
 
@@ -185,11 +205,12 @@ Sources live in `config.yaml`:
 - DeepSeek, Qwen, and Moonshot model releases on Hugging Face, plus Hugging Face trending text models created in the window
 - vLLM and SGLang GitHub releases
 - arXiv (`cs.CL`, `cs.LG`, `cs.AI`, title keywords only)
-- Exa search across the same themes, scoped to the window
+- The Monday newsletter also reads `sources/<YYYY-MM-DD>.json` (see above) before the feeds
+- Exa search across the same themes, scoped to the window, only when `EXA_ENABLED=1`
 
 To add a source, append an entry. `type` is `rss`, `html` (`parser: anthropic` or `parser: meta`), `reuters`, `arxiv`, or `huggingface`. `priority` decides which copy wins when two sources run the same story (lower number wins). `kind` is `lab`, `news`, `release`, or `paper`.
 
-After dedupe, the top 15 candidates (configurable with `read_candidates`) are read in full. Exa contents fills in pages that block a direct fetch. The model ranks that shortlist. It sees the full extracted text, not a 500-character snippet.
+After dedupe, the top candidates (configurable with `read_candidates`, 20 in `config.yaml`) are read in full. When `EXA_ENABLED=1`, Exa contents fills in pages that block a direct fetch, inside the same call cap. The model ranks that shortlist. It sees the full extracted text, not a 500-character snippet, and it may use a story's brief reflection. It must not invent facts.
 
 ## Memory
 

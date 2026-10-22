@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.dedupe import canonical_url
-from src.discover import prepare_candidates
+from src.discover import discovery_blocked, prepare_candidates
 from src.expect import coverage_report
 from src.fetch import enrich_previews, fetch_all
 from src.models import BriefingItem
@@ -138,10 +138,9 @@ def run_briefing(
         searcher=searcher,
         reader=reader,
     )
-    feeds_untrusted = discovered.successes == 0 or (
-        discovered.feed_count == 0 and discovered.successes * 2 < discovered.source_count
-    )
-    if feeds_untrusted and discovered.exa_count == 0:
+    # Mon/Wed/Fri briefings do not read the weekly sources file. RSS only,
+    # plus Exa when EXA_ENABLED=1. prepare_candidates enforces that gate.
+    if discovery_blocked(discovered):
         raise BriefingError(
             "Too many sources failed to trust a quiet note. Not posting."
         )
@@ -220,7 +219,8 @@ def run_briefing(
             items = []
 
     print(
-        f"Fetched feeds {discovered.feed_count}, exa {discovered.exa_count}, "
+        f"Fetched feeds {discovered.feed_count}, sources file {discovered.curated_count}, "
+        f"exa {discovered.exa_count}, "
         f"unseen {len(fresh)}, deduped {len(unique)}, selected {len(selected)}",
         file=sys.stderr,
     )
