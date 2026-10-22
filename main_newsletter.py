@@ -7,6 +7,10 @@ Slack and it does not publish the site.
 
     python main_newsletter.py --dry-run --window-end 2026-10-19
     python main_newsletter.py --send --window-end 2026-10-19
+    python main_newsletter.py --mode lesson --dry-run --date 2026-10-20
+
+`--mode lesson` reads one Learning-bot lesson file and writes site MDX.
+It never sends. The default mode is still the Monday news issue.
 
 Reads TOGETHER_API_KEY (a personal key, not a company key) and EXA_API_KEY
 from the environment. A real send also reads RESEND_API_KEY and
@@ -28,6 +32,7 @@ import yaml
 
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
+from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
 from src.newsletter import email_subject, render_email, render_mdx, render_plain
 from src.resend_send import (
     SendError,
@@ -111,8 +116,45 @@ def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retenti
     remember_issue(issue, state_dir / "recent_briefings.json", when=now)
 
 
+def run_lesson(argv) -> int:
+    """Copy one lesson file into ./out as site MDX. Sending is hard-disabled."""
+    if "--send" in argv or "--post" in argv or "--publish" in argv:
+        print("Lesson mode never sends, posts, or publishes.", file=sys.stderr)
+        return 2
+    raw_date = _flag(argv, "--date")
+    if raw_date:
+        try:
+            datetime.strptime(raw_date, "%Y-%m-%d")
+        except ValueError:
+            print("--date must be YYYY-MM-DD", file=sys.stderr)
+            return 2
+        date = raw_date
+    else:
+        date = pacific_today()
+    out = Path(os.environ.get("OUT_DIR") or "out")
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        lesson = lesson_for_date(date)
+    except LessonBlocked as exc:
+        blocked = out / f"{date}.blocked.txt"
+        blocked.write_text(exc.line + "\n", encoding="utf-8")
+        print(exc.line)
+        return 2
+    dest = out / f"{lesson.date}-{lesson.slug}.mdx"
+    dest.write_text(render_lesson_mdx(lesson), encoding="utf-8")
+    print(f"Wrote {dest}", file=sys.stderr)
+    print("Dry run: nothing was posted or sent.", file=sys.stderr)
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    mode = (_flag(argv, "--mode") or "news").strip().lower()
+    if mode == "lesson":
+        return run_lesson(argv)
+    if mode != "news":
+        print("--mode must be news or lesson.", file=sys.stderr)
+        return 2
     if "--post" in argv:
         print("main_newsletter.py does not post to Slack.", file=sys.stderr)
         return 2
@@ -196,9 +238,10 @@ def main(argv=None) -> int:
         for reason in failures:
             print(f"  {reason}", file=sys.stderr)
         return 2
-    (out / f"{issue.date}.mdx").write_text(render_mdx(issue))
-    (out / f"{issue.date}.html").write_text(render_email(issue))
-    (out / f"{issue.date}.txt").write_text(render_plain(issue))
+    lesson = week_lesson(issue.date)
+    (out / f"{issue.date}.mdx").write_text(render_mdx(issue, lesson=lesson))
+    (out / f"{issue.date}.html").write_text(render_email(issue, lesson=lesson))
+    (out / f"{issue.date}.txt").write_text(render_plain(issue, lesson=lesson))
     print(f"Wrote {out / (issue.date + '.mdx')}", file=sys.stderr)
     print(f"Wrote {out / (issue.date + '.html')}", file=sys.stderr)
     print(f"Wrote {out / (issue.date + '.txt')}", file=sys.stderr)
@@ -219,8 +262,8 @@ def main(argv=None) -> int:
                 api_key=api_key,
                 to=recipient,
                 subject=subject,
-                html=render_email(issue, broadcast=False),
-                text=render_plain(issue, broadcast=False),
+                html=render_email(issue, broadcast=False, lesson=lesson),
+                text=render_plain(issue, broadcast=False, lesson=lesson),
             )
             print(f"Sent a test email to {recipient}. The broadcast was not sent.", file=sys.stderr)
             return 0
@@ -228,8 +271,8 @@ def main(argv=None) -> int:
             api_key=api_key,
             audience_id=audience_id,
             subject=subject,
-            html=render_email(issue, broadcast=True),
-            text=render_plain(issue, broadcast=True),
+            html=render_email(issue, broadcast=True, lesson=lesson),
+            text=render_plain(issue, broadcast=True, lesson=lesson),
         )
         send_broadcast(api_key=api_key, broadcast_id=broadcast_id)
     except SendError as exc:

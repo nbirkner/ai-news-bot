@@ -74,7 +74,19 @@ def _also_line(issue) -> str:
     return "Also in the window: " + "; ".join(titles) + "."
 
 
-def render_mdx(issue) -> str:
+def _lesson_bits(lesson) -> tuple:
+    """Title, summary, and public URL for an optional Monday lesson section."""
+    if not lesson:
+        return "", "", ""
+    title = " ".join(str(getattr(lesson, "title", "") or "").split())
+    summary = " ".join(str(getattr(lesson, "summary", "") or "").split())
+    url = str(getattr(lesson, "web_url", "") or "").strip()
+    if not title or not summary or not url.startswith("https://"):
+        return "", "", ""
+    return title, summary, url
+
+
+def render_mdx(issue, *, lesson=None) -> str:
     tags = ", ".join(issue.tags or ["ai"])
     lines = [
         "---",
@@ -104,6 +116,18 @@ def render_mdx(issue) -> str:
     also = _also_line(issue)
     if also:
         lines.extend([also, ""])
+    lesson_title, lesson_summary, lesson_url = _lesson_bits(lesson)
+    if lesson_title:
+        lines.extend([
+            "## This week's lesson",
+            "",
+            f"**{lesson_title}**",
+            "",
+            lesson_summary,
+            "",
+            f"[Read the lesson]({lesson_url})",
+            "",
+        ])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -279,7 +303,20 @@ def _dark_mode_css() -> str:
     """
 
 
-def render_email(issue, *, broadcast: bool = True) -> str:
+def _lesson_html(lesson) -> str:
+    title, summary, url = _lesson_bits(lesson)
+    if not title:
+        return ""
+    return (
+        f'<h2 class="fg" style="{_type(18, 600, INK, "1.35", bottom=12, tracking="-0.015em")};padding:0;">'
+        f"This week's lesson</h2>"
+        f'<p class="fg" style="{_type(16, 600, INK, "1.45", bottom=8)}">{_e(title)}</p>'
+        f'<p class="fg" style="{_type(16, 400, INK, "1.65")}">{_e(summary)}</p>'
+        f'<p style="margin:16px 0 0;">{_link(_e(url), "Read the lesson")}</p>'
+    )
+
+
+def render_email(issue, *, broadcast: bool = True, lesson=None) -> str:
     """HTML letter for Resend.
 
     Every light-mode style is inline. The head block adds the site fonts,
@@ -365,6 +402,9 @@ def render_email(issue, *, broadcast: bool = True) -> str:
             "22px 0",
             border=True,
         ))
+    lesson_html = _lesson_html(lesson)
+    if lesson_html:
+        rows.append(_row(lesson_html, "24px 0 20px", border=True))
     rows.append(_row(
         "<p class=\"fg\" style=\"" + _type(14, 400, INK, "1.5") + "\">AI News by Niki Birkner</p>"
         + f'<p style="margin:12px 0 0;">{_link(_e(page), "Read this on the web", color=INK, underline=ACCENT, klass="footlink")}</p>'
@@ -419,7 +459,7 @@ def render_email(issue, *, broadcast: bool = True) -> str:
     return html_doc
 
 
-def render_plain(issue, *, broadcast: bool = True) -> str:
+def render_plain(issue, *, broadcast: bool = True, lesson=None) -> str:
     """Plain-text twin of render_email. Same words, no markup."""
     lines = [
         f"Forwarded this? Subscribe at {SUBSCRIBE_LABEL}",
@@ -456,6 +496,21 @@ def render_plain(issue, *, broadcast: bool = True) -> str:
     also = _also_line(issue)
     if also:
         lines.extend(["-" * 24, "", also, ""])
+    lesson_title, lesson_summary, lesson_url = _lesson_bits(lesson)
+    if lesson_title:
+        lines.extend([
+            "-" * 24,
+            "",
+            "This week's lesson",
+            "",
+            lesson_title,
+            "",
+            lesson_summary,
+            "",
+            "Read the lesson",
+            lesson_url,
+            "",
+        ])
     lines.extend([
         "-" * 24,
         "",
