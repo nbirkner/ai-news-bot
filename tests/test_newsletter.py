@@ -359,13 +359,29 @@ def test_email_uses_the_site_mark_orange_and_fonts():
     assert "#C2410C" in html
     assert "#FED7AA" in html
     assert "#FB923C" in html
-    assert "Schibsted Grotesk" in html
+    assert "Plus Jakarta Sans" in html
+    assert "Schibsted Grotesk" not in html
     assert "Fragment Mono" in html
+    assert "-apple-system" in html
     assert "Helvetica Neue" in html
+    assert "Arial" in html
     assert "@font-face" in html
+    assert "family=Plus+Jakarta+Sans:wght@400;600" in html
+    assert "plusjakartasans/v12/LDIoaomQNQcsA88c7O9yZ4KMCoOg4Ko20yygg_vb.woff2" in html
+    assert "font-family:'Plus Jakarta Sans';font-style:normal;font-weight:400;" in html
+    assert "font-family:'Plus Jakarta Sans';font-style:normal;font-weight:600;" in html
     assert "fonts.googleapis.com" in html
     assert 'class="accent"' in html
     assert ">AI News</p>" in html
+    brand = html.split('class="accent" style="', 1)[1].split('"', 1)[0]
+    assert "Plus Jakarta Sans" in brand
+    assert "Fragment Mono" not in brand
+    headline = html.split("<h1", 1)[1].split("</h1>", 1)[0]
+    assert "Plus Jakarta Sans" in headline
+    assert "Fragment Mono" not in headline
+    byline = html.split("by Niki Birkner", 1)[0].rsplit('style="', 1)[1].split('"', 1)[0]
+    assert "Fragment Mono" in byline
+    assert "Plus Jakarta Sans" not in byline
 
 
 def test_forwarded_readers_are_invited_to_subscribe():
