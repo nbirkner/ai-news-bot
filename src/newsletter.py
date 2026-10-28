@@ -1,6 +1,7 @@
 """MDX and email renders of one Issue. Formatting only; the words come from the issue."""
 
 import html
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -38,7 +39,10 @@ LOGO_PX = 36
 # Archive index for people who were forwarded an issue. www, with the trailing slash.
 SUBSCRIBE_URL = "https://www.nikibirkner.com/ai-news/"
 SUBSCRIBE_LABEL = "nikibirkner.com/ai-news"
+LESSONS_SUBSCRIBE_URL = "https://www.nikibirkner.com/ai-lessons/"
+LESSONS_SUBSCRIBE_LABEL = "nikibirkner.com/ai-lessons"
 FONT_LINK = "https://fonts.googleapis.com/css2?family=Fragment+Mono&amp;family=Roboto:wght@400;600&amp;display=swap"
+_MD_TOKEN = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)|\*\*([^*]+)\*\*")
 
 
 def web_url(issue) -> str:
@@ -160,6 +164,25 @@ def email_headline(issue) -> str:
 def email_subject(issue) -> str:
     """Same line as the headline. The MDX title stays whatever the issue carries."""
     return email_headline(issue)
+
+
+def lesson_email_subject(lesson) -> str:
+    """Inbox line for one lesson. Month D, YYYY, no weekday."""
+    raw = str(getattr(lesson, "date", "") or "").strip()
+    try:
+        day = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return f"AI Lessons, {day.strftime('%B')} {day.day}, {day.year}"
+
+
+def lesson_byline(lesson) -> str:
+    raw = str(getattr(lesson, "date", "") or "").strip()
+    try:
+        day = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return "by Niki Birkner"
+    return f"by Niki Birkner · {day.strftime('%A, %B')} {day.day}, {day.year}"
 
 
 def _byline(issue) -> str:
@@ -318,6 +341,157 @@ def _lesson_html(lesson) -> str:
     )
 
 
+def _inline_html(text: str) -> str:
+    parts = []
+    pos = 0
+    for match in _MD_TOKEN.finditer(text or ""):
+        parts.append(_e(text[pos:match.start()]))
+        if match.group(1) is not None:
+            parts.append(_link(html.escape(match.group(2), quote=True), match.group(1)))
+        else:
+            parts.append(f"<strong>{_e(match.group(3))}</strong>")
+        pos = match.end()
+    parts.append(_e((text or "")[pos:]))
+    return "".join(parts)
+
+
+def _inline_plain(text: str) -> str:
+    def repl(match):
+        if match.group(1) is not None:
+            return f"{match.group(1)} ({match.group(2)})"
+        return match.group(3)
+
+    return _MD_TOKEN.sub(repl, text or "").strip()
+
+
+def _lesson_body_blocks(body: str) -> list:
+    """Headings, paragraphs, and lists. A leading # title is left out."""
+    lines = (body or "").replace("\r\n", "\n").split("\n")
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index < len(lines) and lines[index].startswith("# ") and not lines[index].startswith("## "):
+        index += 1
+    blocks = []
+    paragraph = []
+    items = []
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        text = " ".join(part.strip() for part in paragraph).strip()
+        paragraph = []
+        if text:
+            blocks.append(("p", text))
+
+    def flush_items() -> None:
+        nonlocal items
+        if items:
+            blocks.append(("ul", list(items)))
+            items = []
+
+    for line in lines[index:]:
+        stripped = line.strip()
+        if not stripped:
+            flush_paragraph()
+            flush_items()
+            continue
+        if stripped.startswith("## ") or stripped.startswith("### "):
+            flush_paragraph()
+            flush_items()
+            heading = stripped.lstrip("#").strip()
+            if heading:
+                blocks.append(("h", heading))
+            continue
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            flush_paragraph()
+            items.append(stripped[2:].strip())
+            continue
+        if items:
+            flush_items()
+        paragraph.append(stripped)
+    flush_paragraph()
+    flush_items()
+    return blocks
+
+
+def _lesson_body_html(body: str) -> str:
+    chunks = []
+    for kind, value in _lesson_body_blocks(body):
+        if kind == "h":
+            chunks.append(
+                f'<h2 class="fg" style="{_type(18, 600, INK, "1.35", bottom=12, tracking="-0.015em")};padding:0;">'
+                f"{_inline_html(value)}</h2>"
+            )
+        elif kind == "p":
+            chunks.append(
+                f'<p class="fg" style="{_type(16, 400, INK, "1.65", bottom=14)}">{_inline_html(value)}</p>'
+            )
+        else:
+            lis = "".join(
+                f'<li class="fg" style="{_type(16, 400, INK, "1.65", bottom=8)}">{_inline_html(item)}</li>'
+                for item in value
+            )
+            chunks.append(f'<ul style="margin:0 0 14px;padding:0 0 0 18px;">{lis}</ul>')
+    return "".join(chunks)
+
+
+def _lesson_body_plain(body: str) -> list:
+    lines = []
+    for kind, value in _lesson_body_blocks(body):
+        if kind == "ul":
+            for item in value:
+                lines.append(f"- {_inline_plain(item)}")
+            lines.append("")
+        else:
+            lines.extend([_inline_plain(value), ""])
+    return lines
+
+
+def _wrap_email(title: str, preview: str, rows: list) -> str:
+    """Shared letter shell. Light styles are inline. The head holds fonts and dark mode."""
+    body_style = (
+        f"margin:0;padding:0;background-color:{CANVAS};color:{INK};"
+        f"font-family:{SANS};-webkit-text-size-adjust:100%;text-size-adjust:100%;"
+        "-webkit-font-smoothing:antialiased;"
+    )
+    sheet_style = (
+        f"width:100%;max-width:600px;border:1px solid {HAIR};border-collapse:separate;"
+        f"background-color:{SHEET};"
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
+<title>{_e(title)}</title>
+<link rel="stylesheet" href="{FONT_LINK}">
+<style>{_dark_mode_css()}</style>
+</head>
+<body class="bg" bgcolor="{CANVAS}" style="{body_style}">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{CANVAS};">{_e(preview)}</div>
+<table role="presentation" class="bg" width="100%" bgcolor="{CANVAS}" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background-color:{CANVAS};">
+<tr><td class="wrap" align="center" valign="top" style="padding:32px 16px;margin:0;">
+<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" align="center"><tr><td><![endif]-->
+<table role="presentation" class="sheet" width="600" bgcolor="{SHEET}" cellpadding="0" cellspacing="0" border="0" style="{sheet_style}">
+<tr><td class="sheet px" align="left" bgcolor="{SHEET}" style="padding:40px 36px 36px;background-color:{SHEET};overflow-wrap:break-word;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">
+{''.join(rows)}
+</table>
+</td></tr>
+</table>
+<!--[if mso]></td></tr></table><![endif]-->
+</td></tr>
+</table>
+</body>
+</html>
+"""
+
+
 def render_email(issue, *, broadcast: bool = True, lesson=None) -> str:
     """HTML letter for Resend.
 
@@ -417,48 +591,7 @@ def render_email(issue, *, broadcast: bool = True, lesson=None) -> str:
         extra=f"background-color:{WARM};",
         bgcolor=WARM,
     ))
-    body_style = (
-        f"margin:0;padding:0;background-color:{CANVAS};color:{INK};"
-        f"font-family:{SANS};-webkit-text-size-adjust:100%;text-size-adjust:100%;"
-        "-webkit-font-smoothing:antialiased;"
-    )
-    sheet_style = (
-        f"width:100%;max-width:600px;border:1px solid {HAIR};border-collapse:separate;"
-        f"background-color:{SHEET};"
-    )
-    html_doc = f"""<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta name="color-scheme" content="light dark">
-<meta name="supported-color-schemes" content="light dark">
-<meta name="x-apple-disable-message-reformatting">
-<meta name="format-detection" content="telephone=no,date=no,address=no,email=no">
-<title>{_e(email_subject(issue) or "AI News")}</title>
-<link rel="stylesheet" href="{FONT_LINK}">
-<style>{_dark_mode_css()}</style>
-</head>
-<body class="bg" bgcolor="{CANVAS}" style="{body_style}">
-<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{CANVAS};">{_e(preview)}</div>
-<table role="presentation" class="bg" width="100%" bgcolor="{CANVAS}" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background-color:{CANVAS};">
-<tr><td class="wrap" align="center" valign="top" style="padding:32px 16px;margin:0;">
-<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" align="center"><tr><td><![endif]-->
-<table role="presentation" class="sheet" width="600" bgcolor="{SHEET}" cellpadding="0" cellspacing="0" border="0" style="{sheet_style}">
-<tr><td class="sheet px" align="left" bgcolor="{SHEET}" style="padding:40px 36px 36px;background-color:{SHEET};overflow-wrap:break-word;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">
-{''.join(rows)}
-</table>
-</td></tr>
-</table>
-<!--[if mso]></td></tr></table><![endif]-->
-</td></tr>
-</table>
-</body>
-</html>
-"""
-    return html_doc
+    return _wrap_email(email_subject(issue) or "AI News", preview, rows)
 
 
 def render_plain(issue, *, broadcast: bool = True, lesson=None) -> str:
@@ -521,6 +654,150 @@ def render_plain(issue, *, broadcast: bool = True, lesson=None) -> str:
         "",
         "Unsubscribe",
         unsubscribe_href(broadcast),
+        "",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_lesson_email(lesson, *, broadcast: bool = True) -> str:
+    """HTML letter for one AI Lessons issue. Same shell as AI News.
+
+    Roboto is the title, the lesson title, and the body. Fragment Mono stays
+    on the forward line, the byline, and the level. Broadcasts unsubscribe
+    through Resend's placeholder. A test render uses the lesson URL.
+    """
+    page = str(getattr(lesson, "web_url", "") or "").strip()
+    unsub = html.escape(UNSUBSCRIBE if broadcast else page, quote=True)
+    subject = lesson_email_subject(lesson) or "AI Lessons"
+    summary = " ".join(str(getattr(lesson, "summary", "") or "").split())
+    preview = summary or "AI Lessons by Niki Birkner"
+    logo = (
+        f'<a href="{_e(page)}" style="text-decoration:none;border:0;">'
+        f'<img src="{LOGO_URL}" width="{LOGO_PX}" height="{LOGO_PX}" alt="Niki Birkner" '
+        f'style="display:block;border:0;outline:none;text-decoration:none;width:{LOGO_PX}px;height:{LOGO_PX}px;">'
+        f"</a>"
+    )
+    masthead = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+        "<tr>"
+        f'<td width="{LOGO_PX}" valign="middle" style="width:{LOGO_PX}px;padding:0 12px 0 0;">{logo}</td>'
+        '<td valign="middle" align="left">'
+        f'<p class="accent" style="{_type(18, 600, ACCENT, "1.2", tracking="-0.02em")}">AI Lessons</p>'
+        f'<p class="muted" style="{_type(13, 400, MUTED, "1.45", family=MONO)};margin-top:5px;">'
+        f"{_e(lesson_byline(lesson))}</p>"
+        "</td></tr></table>"
+    )
+    subscribe = (
+        f'<p class="muted" style="{_type(12, 400, MUTED, "1.45", family=MONO)}">'
+        "Forwarded this? Subscribe at "
+        + _link(
+            html.escape(LESSONS_SUBSCRIBE_URL, quote=True),
+            LESSONS_SUBSCRIBE_LABEL,
+            size=12,
+            color=ACCENT,
+            family=MONO,
+        )
+        + "</p>"
+    )
+    rows = [
+        _row(subscribe, "0 0 14px"),
+        _row(masthead, "0 0 18px"),
+        (
+            "<tr><td class=\"accent-bar\" bgcolor=\"" + ACCENT + "\" height=\"3\" "
+            f'style="height:3px;line-height:3px;font-size:3px;background-color:{ACCENT};padding:0;margin:0;">'
+            "&nbsp;</td></tr>"
+        ),
+    ]
+    opened = True
+
+    def add(inner: str, padding: str) -> None:
+        nonlocal opened
+        rows.append(_row(inner, padding, border=not opened))
+        opened = True
+
+    add(
+        f'<h1 class="fg" style="{_type(26, 600, INK, "1.25", tracking="-0.02em")};padding:0;">{_e(subject)}</h1>',
+        "24px 0 0",
+    )
+    level = " ".join(str(getattr(lesson, "level", "") or "").split())
+    if level:
+        add(
+            f'<p class="muted" style="{_type(13, 400, MUTED, "1.45", family=MONO)}">{_e(level)}</p>',
+            "10px 0 0",
+        )
+    if summary:
+        add(
+            f'<p class="fg" style="{_type(17, 400, INK, "1.65")}">{_e(summary)}</p>',
+            "16px 0 0",
+        )
+    if page:
+        add(
+            f'<p style="margin:0;">{_link(_e(page), "Read this on the web")}</p>',
+            "16px 0 26px",
+        )
+    title = " ".join(str(getattr(lesson, "title", "") or "").split())
+    body_html = _lesson_body_html(str(getattr(lesson, "body", "") or ""))
+    parts = []
+    if title:
+        parts.append(
+            f'<h2 class="fg" style="{_type(18, 600, INK, "1.35", bottom=12, tracking="-0.015em")};padding:0;">'
+            f"{_e(title)}</h2>"
+        )
+    if body_html:
+        parts.append(body_html)
+    if parts:
+        rows.append(_row("".join(parts), "24px 0 20px", border=True))
+    footer_web = ""
+    if page:
+        footer_web = (
+            f'<p style="margin:12px 0 0;">{_link(_e(page), "Read this on the web", color=INK, underline=ACCENT, klass="footlink")}</p>'
+        )
+    rows.append(_row(
+        "<p class=\"fg\" style=\"" + _type(14, 400, INK, "1.5") + "\">AI Lessons by Niki Birkner</p>"
+        + footer_web
+        + f'<p style="margin:8px 0 0;">{_link(unsub, "Unsubscribe", color=INK, underline=ACCENT, klass="footlink")}</p>',
+        "16px 16px",
+        border=True,
+        klass="foot",
+        extra=f"background-color:{WARM};",
+        bgcolor=WARM,
+    ))
+    return _wrap_email(subject, preview, rows)
+
+
+def render_lesson_plain(lesson, *, broadcast: bool = True) -> str:
+    """Plain-text twin of render_lesson_email."""
+    page = str(getattr(lesson, "web_url", "") or "").strip()
+    unsub = UNSUBSCRIBE if broadcast else page
+    summary = " ".join(str(getattr(lesson, "summary", "") or "").split())
+    lines = [
+        f"Forwarded this? Subscribe at {LESSONS_SUBSCRIBE_LABEL}",
+        LESSONS_SUBSCRIBE_URL,
+        "",
+        "AI Lessons",
+        lesson_byline(lesson),
+        "",
+    ]
+    subject = lesson_email_subject(lesson)
+    if subject:
+        lines.extend([subject, ""])
+    level = " ".join(str(getattr(lesson, "level", "") or "").split())
+    if level:
+        lines.extend([level, ""])
+    if summary:
+        lines.extend([summary, ""])
+    if page:
+        lines.extend(["Read this on the web", page, ""])
+    title = " ".join(str(getattr(lesson, "title", "") or "").split())
+    if title:
+        lines.extend([title, ""])
+    lines.extend(_lesson_body_plain(str(getattr(lesson, "body", "") or "")))
+    lines.extend([
+        "AI Lessons by Niki Birkner",
+        page,
+        "",
+        "Unsubscribe",
+        unsub,
         "",
     ])
     return "\n".join(lines).rstrip() + "\n"

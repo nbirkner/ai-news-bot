@@ -1,6 +1,6 @@
 # AI briefing
 
-One public AI news issue, generated once, then rendered as site MDX and as email HTML. The Monday issue is broadcast with Resend. Slack posting and the site publish are separate and are not turned on.
+One public AI news issue, generated once, then rendered as site MDX and as email HTML. The Monday issue is broadcast with Resend. The Tuesday lesson is a separate broadcast, to a separate audience. Slack posting and the site publish are separate and are not turned on.
 
 The copy is a general briefing for people building with AI. It does not take a Together product, customer, revenue, or competitor angle, and it does not use internal names. Sources are public pages with public URLs.
 
@@ -84,13 +84,55 @@ python3 scripts/ingest_news.py --date 2026-10-19 --render
 
 ### Lesson file
 
-`python3 main_newsletter.py --mode lesson --dry-run --date 2026-10-20` reads `/cursor/stores/bot/ai-lessons-weekly/YYYY-MM-DD-slug.md` (`LESSON_WEEKLY_DIR` overrides the directory). The file is the public lesson format, including frontmatter `title`, `date`, `level` (`Foundations`, `Systems`, or `Frontier`), `slug`, and `summary`. A valid file is copied to `out/YYYY-MM-DD-slug.mdx` for the site. A missing file, a bad level, or a draft that skips a required section writes only `out/YYYY-MM-DD.blocked.txt` containing `BLOCKED: <reason>`. `--send`, `--post`, and `--publish` exit 2. The command never calls Resend.
+`python3 main_newsletter.py --mode lesson --dry-run --date 2026-10-20` reads `/cursor/stores/bot/ai-lessons-weekly/YYYY-MM-DD-slug.md` (`LESSON_WEEKLY_DIR` overrides the directory). The file is the public lesson format, including frontmatter `title`, `date`, `level` (`Foundations`, `Systems`, or `Frontier`), `slug`, and `summary`. A valid file is copied to `out/YYYY-MM-DD-slug.mdx`, `.html`, and `.txt`. The HTML uses the same letter as AI News: Roboto for the title and the body, Fragment Mono on the forward line, the byline, and the level. The subject is `AI Lessons, October 20, 2026` for that date. A missing file, a bad level, or a draft that skips a required section writes only `out/YYYY-MM-DD.blocked.txt` containing `BLOCKED: <reason>`.
+
+`--post` and `--publish` exit 2. `--dry-run` never calls Resend. `--send` broadcasts only when `RESEND_LESSONS_AUDIENCE_ID` is set to a segment that is not the AI News audience. A missing id exits 2 and does not call Resend. The AI News id is not a fallback. An id equal to `RESEND_AUDIENCE_ID`, or any id that starts with `a2f59f11`, exits 2 and does not call Resend. `--test-to` sends one message through `/emails` and does not broadcast to either audience.
 
 When the Monday newsletter renders and that week's lesson file is present and valid, the issue gains a **This week's lesson** section (title, summary, and the lesson link). No file means the section is left out and the issue still renders.
 
-### Tuesday dry run
+### Tuesday send
 
-Tuesdays at 9:00 AM America/Los_Angeles. `.github/workflows/lessons.yml` runs two UTC crons, `0 16 * * 2` and `0 17 * * 2`. A guard continues only when the America/Los_Angeles hour is 9. `DRY_RUN` is `"1"` and the command is `--mode lesson --dry-run`. It does not send, post, or publish.
+Tuesdays at 9:00 AM America/Los_Angeles. `.github/workflows/lessons.yml` runs two UTC crons, `0 16 * * 2` and `0 17 * * 2`. A guard continues only when the America/Los_Angeles hour is 9.
+
+The scheduled run passes `--mode lesson --send`. It reads `RESEND_API_KEY` and `RESEND_LESSONS_AUDIENCE_ID`. It does not read `RESEND_AUDIENCE_ID`. From is `Niki Birkner <ailessons@nikibirkner.com>` unless `RESEND_LESSONS_FROM` is set. The subject is `lesson_email_subject()` (`AI Lessons, October 20, 2026` for that lesson). The HTML is `render_lesson_email(broadcast=True)` and the text is `render_lesson_plain(broadcast=True)`.
+
+The send does not run when the lesson file is missing or invalid, when the audience id is missing or is the AI News audience, or when that lesson date is already in `state/sent_lessons.json`. That file is written only after Resend accepts the broadcast. A dry run, a test email, and a failed send leave it unchanged. The lessons cache is separate from the Monday cache.
+
+Slack is not posted. The site repo is not updated.
+
+A manual run is a dry run unless **dry_run** is unchecked. **test_to** sends one email to that address instead of the broadcast. It is ignored while dry_run is checked.
+
+### AI Lessons audience (one-time)
+
+Resend calls the list a segment. The id still goes in `RESEND_LESSONS_AUDIENCE_ID`, which is the name the site signup expects. This repo does not create the segment during a send. Creating one does not send email.
+
+Do this before merging the Tuesday workflow, so the first scheduled run has an audience. Until the secret is set, the Tuesday job fails closed and sends nothing.
+
+1. In the [Resend segments dashboard](https://resend.com/segments), create a segment named `AI Lessons`. Leave the AI News segment alone. Its id starts with `a2f59f11`. The empty General segment is not the lessons list.
+2. Or, with a Resend key that can manage segments:
+
+   ```bash
+   RESEND_API_KEY=re_... python3 scripts/create_lessons_audience.py
+   ```
+
+   The command prints the segment id and does not send mail. If the id matches `RESEND_AUDIENCE_ID` or starts with `a2f59f11`, it exits 2 and tells you not to use it.
+
+3. GitHub repo **Settings → Secrets and variables → Actions** on `nbirkner/ai-news-bot`:
+
+| Secret | Value |
+| --- | --- |
+| `RESEND_LESSONS_AUDIENCE_ID` | The new segment id. Not the AI News id. |
+| `RESEND_LESSONS_FROM` | Optional. Blank uses `Niki Birkner <ailessons@nikibirkner.com>`. `nikibirkner.com` is already the verified domain used by `ainews@nikibirkner.com`. |
+| `RESEND_API_KEY` | Already set for the Monday send. The Tuesday workflow reads the same secret. |
+
+4. Vercel → the nikibirkner.com project → **Settings → Environment Variables** (Production, and Preview if signup should work there):
+
+| Name | Value |
+| --- | --- |
+| `RESEND_LESSONS_AUDIENCE_ID` | The same segment id. |
+| `RESEND_API_KEY` | Already set for the news confirm flow. |
+
+The lessons signup route (`POST /api/lessons/subscribe`, or whichever route the site already uses) must add the contact to `RESEND_LESSONS_AUDIENCE_ID` only. If that variable is empty, the route should fail. It must not write the address into `RESEND_AUDIENCE_ID`. Mirror the news double opt-in: create the contact as unsubscribed, email a confirm link, and subscribe on confirm. This bot does not edit the site repo.
 
 ### Cost lines in the usage log
 
@@ -109,7 +151,7 @@ Publishing stops, and this dry run writes a blocked file, when:
 - the text is unsafe or contains a secret
 - the model reply fails the issue schema (headline, body of at least three sentences, why it matters, integer index)
 
-Stories that fail the one-liner or URL check are dropped. The other checks block the whole issue. A real send also refuses an issue date already listed in `state/sent_issues.json`. A dry run does not write that file.
+Stories that fail the one-liner or URL check are dropped. The other checks block the whole issue. A real Monday send also refuses an issue date already listed in `state/sent_issues.json`. A real Tuesday send refuses a lesson date already listed in `state/sent_lessons.json`. A dry run does not write either file.
 
 ## Site changes
 
@@ -150,8 +192,10 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 | `TOGETHER_API_KEY` | Niki's **personal** Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). Not a Together company key. |
 | `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
 | `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys). Used only when `EXA_ENABLED=1`. |
-| `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Monday send reads this. A dry run does not. |
-| `RESEND_AUDIENCE_ID` | The Resend audience (segment) id the broadcast is sent to. Same secret the site signup uses. |
+| `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Monday send and the Tuesday lesson send read this. A dry run does not. |
+| `RESEND_AUDIENCE_ID` | The Resend segment id for AI News. The Monday broadcast is sent to it. The Tuesday lesson workflow does not read it. |
+| `RESEND_LESSONS_AUDIENCE_ID` | The Resend segment id for AI Lessons. Required for the Tuesday broadcast. Never the AI News id. Same value as the Vercel env of the same name. |
+| `RESEND_LESSONS_FROM` | Optional. From address for the lesson. Blank uses `Niki Birkner <ailessons@nikibirkner.com>`. |
 
 `EXA_API_KEY` is optional. Exa is off unless the environment variable `EXA_ENABLED` is `1` (the workflow passes the `EXA_ENABLED` repository variable, default `0`). The Monday newsletter otherwise uses `sources/<YYYY-MM-DD>.json` plus RSS, and falls back to RSS when that file is missing or invalid. Mon/Wed/Fri briefings use RSS only. With Exa enabled, each run also searches for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
 
@@ -197,12 +241,12 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 
 ## Schedule
 
-| | |
-| --- | --- |
-| Day | Monday |
-| Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16 * * 1` and `0 17 * * 1` |
-| Guard | Continue only when the America/Los_Angeles hour is 9 |
+| | Monday AI News | Tuesday AI Lessons |
+| --- | --- | --- |
+| Clock | 9:00 AM America/Los_Angeles, year-round | 9:00 AM America/Los_Angeles, year-round |
+| UTC crons | `0 16 * * 1` and `0 17 * * 1` | `0 16 * * 2` and `0 17 * * 2` |
+| Guard | Continue only when the America/Los_Angeles hour is 9 | Same guard |
+| Audience | `RESEND_AUDIENCE_ID` | `RESEND_LESSONS_AUDIENCE_ID` |
 
 GitHub's scheduler is UTC and does not follow daylight saving. The two crons fire an hour apart, and the guard drops the one that is not 9:00 on the Pacific clock. A manual run is not subject to the guard.
 
@@ -210,7 +254,7 @@ The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Mo
 
 ## What gets posted
 
-The Monday workflow sends the email. It does not post to Slack and it does not commit the MDX to the site. A manual run with **dry_run** checked sends nothing.
+The Monday workflow sends the AI News email. The Tuesday workflow sends the AI Lessons email to its own audience. Neither posts to Slack or commits the MDX to the site. A manual run with **dry_run** checked sends nothing.
 
 A lede, then four to seven stories when the window supports it, and fewer when it does not. Stories are ranked for people building with AI, with the last five issues in mind so a repeat link is skipped. Slack, the site, and the email are three renders of that same issue.
 
