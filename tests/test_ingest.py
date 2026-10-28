@@ -97,11 +97,12 @@ def test_script_writes_sources_and_email_with_optional_lesson(tmp_path):
     assert "Anthropic publishes a workforce study." in html
     assert "https://www.anthropic.com/research/employment-at-anthropic" in html
     assert "#C2410C" in html
-    assert "Plus Jakarta Sans" in html
+    assert "Roboto" in html
+    assert "Plus Jakarta Sans" not in html
     assert "Schibsted Grotesk" not in html
     assert "This week's lesson" in html
     lesson_heading = html.split("This week's lesson", 1)[0].rsplit('style="', 1)[1]
-    assert "Plus Jakarta Sans" in lesson_heading
+    assert "Roboto" in lesson_heading
     assert "Fragment Mono" not in lesson_heading
     assert "Models miss the middle of a long prompt." in html
     assert "https://nikibirkner.com/ai-lessons/2026-10-20-lost-in-the-middle" in html

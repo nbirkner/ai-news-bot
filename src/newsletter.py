@@ -19,9 +19,9 @@ UNSUBSCRIBE_FALLBACK = WEB_ROOT
 # --muted #6B6B6B, --hairline #EAEAE8, --g0 #F1F1EF, --bg #FFFFFF.
 # Dark --accent #FB923C, --g1 #5A2A12, --bg #0F0F0F, --fg #EDEDED,
 # --muted #9A9A9A, --hairline #222222.
-# Plus Jakarta Sans is the brand title, headlines, and body.
+# Roboto is the brand title, headlines, and body. Gmail loads it.
 # Fragment Mono stays on the meta lines (forward invite, byline, window).
-SANS = "'Plus Jakarta Sans',-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif"
+SANS = "'Roboto',-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif"
 MONO = "'Fragment Mono',ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace"
 INK = "#111111"
 MUTED = "#6B6B6B"
@@ -38,7 +38,7 @@ LOGO_PX = 36
 # Archive index for people who were forwarded an issue. www, with the trailing slash.
 SUBSCRIBE_URL = "https://www.nikibirkner.com/ai-news/"
 SUBSCRIBE_LABEL = "nikibirkner.com/ai-news"
-FONT_LINK = "https://fonts.googleapis.com/css2?family=Fragment+Mono&amp;family=Plus+Jakarta+Sans:wght@400;600&amp;display=swap"
+FONT_LINK = "https://fonts.googleapis.com/css2?family=Fragment+Mono&amp;family=Roboto:wght@400;600&amp;display=swap"
 
 
 def web_url(issue) -> str:
@@ -270,8 +270,8 @@ def _font_face_css() -> str:
     """Latin files for Apple Mail and iOS. Gmail drops this and uses the stack."""
     return """
     @font-face{font-family:'Fragment Mono';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/fragmentmono/v6/4iCr6K5wfMRRjxp0DA6-2CLnB4NHhqcL71Q.woff2) format('woff2');}
-    @font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/plusjakartasans/v12/LDIoaomQNQcsA88c7O9yZ4KMCoOg4Ko20yygg_vb.woff2) format('woff2');}
-    @font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:600;font-display:swap;src:url(https://fonts.gstatic.com/s/plusjakartasans/v12/LDIoaomQNQcsA88c7O9yZ4KMCoOg4Ko20yygg_vb.woff2) format('woff2');}
+    @font-face{font-family:'Roboto';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/roboto/v51/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBHMdazQ.woff2) format('woff2');}
+    @font-face{font-family:'Roboto';font-style:normal;font-weight:600;font-display:swap;src:url(https://fonts.gstatic.com/s/roboto/v51/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBHMdazQ.woff2) format('woff2');}
     """
 
 
