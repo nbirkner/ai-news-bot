@@ -2,8 +2,10 @@ name: AI lessons
 
 # Tuesday lesson at 9:00 America/Los_Angeles. Two UTC crons cover daylight
 # saving; the guard continues only when the Pacific hour is 9.
-# This workflow ingests a lesson file. It does not send email, post to Slack,
-# or publish. DRY_RUN is hardcoded. There is no send flag.
+# The scheduled run broadcasts to RESEND_LESSONS_AUDIENCE_ID.
+# This workflow does not read RESEND_AUDIENCE_ID. A missing lessons
+# audience fails closed inside the script and does not send.
+# Slack posting and the site publish stay off.
 on:
   schedule:
     - cron: "0 16 * * 2"
@@ -15,9 +17,13 @@ on:
         type: string
         default: ""
       dry_run:
-        description: "Always a dry run. This input does not enable sending."
+        description: "Write the lesson and do not send. Uncheck to send."
         type: boolean
         default: true
+      test_to:
+        description: "Send one email to this address instead of the broadcast. Ignored when dry_run is checked."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -51,6 +57,15 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.guard.outputs.proceed == 'true'
 
+      - name: Restore lesson state
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: lessons-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            lessons-state-
+
       - uses: actions/setup-python@v5
         if: steps.guard.outputs.proceed == 'true'
         with:
@@ -79,12 +94,24 @@ jobs:
           fi
           echo "date=$day" >> "$GITHUB_OUTPUT"
 
-      - name: Lesson dry run
+      - name: Lesson
+        id: lesson
         if: steps.guard.outputs.proceed == 'true'
         env:
-          DRY_RUN: "1"
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_LESSONS_AUDIENCE_ID: ${{ secrets.RESEND_LESSONS_AUDIENCE_ID }}
+          RESEND_LESSONS_FROM: ${{ secrets.RESEND_LESSONS_FROM }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          TEST_TO: ${{ github.event_name == 'workflow_dispatch' && inputs.test_to || '' }}
           LESSON_WEEKLY_DIR: /cursor/stores/bot/ai-lessons-weekly
-        run: python main_newsletter.py --mode lesson --dry-run --date "${{ steps.when.outputs.date }}"
+        run: |
+          set -euo pipefail
+          args=(main_newsletter.py --mode lesson --date "${{ steps.when.outputs.date }}")
+          case "${DRY_RUN}" in
+            1|true|True|yes|YES) args+=(--dry-run) ;;
+            *) args+=(--send) ;;
+          esac
+          python "${args[@]}"
 
       - uses: actions/upload-artifact@v4
         if: always() && steps.guard.outputs.proceed == 'true'
@@ -92,3 +119,12 @@ jobs:
           name: lesson-out
           path: out/
           if-no-files-found: ignore
+
+      # Only a real broadcast updates the cache. A dry run, a test email,
+      # a missing audience, and a failed send leave it untouched.
+      - name: Save lesson state
+        if: steps.lesson.outputs.sent == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: lessons-state-${{ github.run_id }}-${{ github.run_attempt }}
