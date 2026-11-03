@@ -9,6 +9,7 @@ from src.summarize import (
     SchemaError,
     _accept,
     _call_together,
+    _parse_json_object,
     _publishable_body,
     _source_text,
     compose_briefing,
@@ -852,6 +853,148 @@ def test_a_cost_cut_is_not_labeled_as_a_benchmark():
     labeled = label_benchmark(scored, article)
     assert "benchmark, a company-reported figure." in labeled
     assert "Weights ship later." in labeled
+
+
+def _ranked_item(**extra) -> dict:
+    row = {
+        "index": 0,
+        "headline": "Open-weight models took most of the tokens",
+        "body": _full_body(),
+        "why_it_matters": (
+            "For people building with AI, a cheap token and an expensive closed model are different bills."
+        ),
+    }
+    row.update(extra)
+    return row
+
+
+def _candidate_count(prompt: str) -> int:
+    start = prompt.find("Candidates:\n")
+    if start < 0:
+        return 0
+    blob = prompt[start + len("Candidates:\n"):]
+    end = blob.find("\n\nReturn:")
+    if end < 0:
+        return 0
+    return len(json.loads(blob[:end]))
+
+
+def test_glm_non_list_items_parse_as_a_list():
+    """Shapes that made the Nov 2 run say `items must be a list`."""
+    wrapped = (
+        '<think>draft {"items": {"skip": true}} more {not json</think>\n'
+        '{"lede": "Tokens moved.", "items": [{"index": "0", "headline": "Hi", '
+        '"body": "One sentence. Two sentence.", "why_it_matters": "A bill changes."}]}'
+    )
+    parsed = _parse_json_object(wrapped)
+    assert isinstance(parsed["items"], list)
+    assert parsed["items"][0]["index"] == 0
+
+    single = _parse_json_object(json.dumps({
+        "lede": "Tokens moved.",
+        "items": _ranked_item(index=1),
+    }))
+    assert [row["index"] for row in single["items"]] == [1]
+
+    stringed = _parse_json_object(json.dumps({
+        "lede": "Tokens moved.",
+        "items": json.dumps([_ranked_item(index="2")]),
+    }))
+    assert stringed["items"][0]["index"] == 2
+
+    trailing = _parse_json_object(
+        '{"items": {"unexpected": true}}\n'
+        + json.dumps({"lede": "Tokens moved.", "items": [_ranked_item(index=3)]})
+    )
+    assert trailing["items"][0]["index"] == 3
+
+
+def test_a_single_object_items_field_is_published_without_a_retry(monkeypatch):
+    prompts = []
+
+    def fake_call(prompt, api_key, model):
+        prompts.append(prompt)
+        return json.dumps({"lede": "Tokens and dollars moved apart.", "items": _ranked_item()})
+
+    monkeypatch.setattr("src.summarize._call_together", fake_call)
+    lede, pairs = compose_briefing(
+        [_rich_article()],
+        "sk-test",
+        "zai-org/GLM-5.3",
+        strict_auth=True,
+        require_full_body=True,
+    )
+    assert len(prompts) == 1
+    assert pairs
+    assert "71.5%" in pairs[0][2]
+    assert lede
+
+
+def test_items_that_are_not_a_list_retry_once_then_block(monkeypatch):
+    prompts = []
+
+    def fake_call(prompt, api_key, model):
+        prompts.append(prompt)
+        return json.dumps({"lede": "No.", "items": {"unexpected": True}})
+
+    monkeypatch.setattr("src.summarize._call_together", fake_call)
+    with pytest.raises(SchemaError) as exc:
+        compose_briefing(
+            [_rich_article()],
+            "sk-test",
+            "zai-org/GLM-5.3",
+            strict_auth=True,
+            require_full_body=True,
+        )
+    assert len(prompts) == 2
+    assert "must be a JSON list" in prompts[1]
+    message = str(exc.value)
+    assert "items must be a list" in message
+    assert "got dict" in message
+    assert "Retried once" in message
+    assert "still invalid" in message
+
+
+def test_one_bad_ranking_batch_does_not_discard_the_issue(monkeypatch):
+    """The Nov 2 shortlist was 20 stories, ranked 8 at a time.
+
+    The last batch returned items that were not a list. That used to abort
+    the whole issue, including stories earlier batches had already accepted.
+    """
+    prompts = []
+    rich = _rich_article()
+    articles = [rich]
+    for index in range(1, 9):
+        articles.append(_article(f"Desk note {index} about office hours", "A calendar hold was moved."))
+        articles[-1].url = f"https://example.com/desk-{index}"
+        articles[-1].source_kind = "news"
+
+    def fake_call(prompt, api_key, model):
+        prompts.append(prompt)
+        # The remainder batch, and its one schema retry, never become a list.
+        if "Desk note 8" in prompt:
+            return json.dumps({"lede": "No.", "items": {"unexpected": True}})
+        # The final rewrite fails the same way. Batch stories must still ship.
+        if _candidate_count(prompt) < 8:
+            return json.dumps({"lede": "No.", "items": {"unexpected": True}})
+        return json.dumps({
+            "lede": "Tokens and dollars moved apart.",
+            "items": [_ranked_item()],
+        })
+
+    monkeypatch.setattr("src.summarize._call_together", fake_call)
+    lede, pairs = compose_briefing(
+        articles,
+        "sk-test",
+        "zai-org/GLM-5.3",
+        strict_auth=True,
+        require_full_body=True,
+        limit=7,
+    )
+    assert any("must be a JSON list" in prompt for prompt in prompts)
+    assert any(row[0].url == rich.url and "71.5%" in row[2] for row in pairs)
+    assert all("Desk note" not in row[0].title for row in pairs)
+    assert lede
 
 
 def test_extractive_uses_a_source_why_line_when_it_is_present():
