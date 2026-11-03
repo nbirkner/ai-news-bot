@@ -1,7 +1,13 @@
 name: AI briefing
 
-# Monday newsletter at 9:00 America/Los_Angeles. Two UTC crons cover daylight
-# saving; the guard continues only when the Pacific hour is 9.
+# Monday newsletter, aimed at 9:00 America/Los_Angeles.
+# Both UTC crons stay. 16:00 UTC is 9:00 PDT and 8:00 PST; 17:00 UTC is
+# 10:00 PDT and 9:00 PST. Dropping either one misses 9:00 for half the year.
+# On schedule, the guard proceeds when the Pacific weekday is Monday and the
+# hour is 09 through 12 inclusive, so a late Actions start still sends
+# through noon. A second cron the same Monday does not broadcast twice:
+# main_newsletter.py exits 0 when state/sent_issues.json already lists that
+# window_end, and the cache is saved only after a real broadcast.
 # Slack posting and the site publish stay off. This workflow does not post
 # and it does not push the MDX anywhere.
 on:
@@ -34,22 +40,34 @@ jobs:
   newsletter:
     runs-on: ubuntu-latest
     steps:
-      - name: Pacific 9am guard
+      - name: Pacific Monday window
         id: guard
         run: |
           set -euo pipefail
+          hour=$(TZ=America/Los_Angeles date +%H)
+          weekday_num=$(TZ=America/Los_Angeles date +%u)
+          weekday_name=$(TZ=America/Los_Angeles date +%A)
+          # 10# keeps 08 and 09 in decimal. A leading zero is octal in bash.
+          hour_num=$((10#$hour))
+          echo "America/Los_Angeles hour=${hour} weekday=${weekday_name} (${weekday_num})"
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "Manual run. The 9:00 America/Los_Angeles guard applies to the schedule only."
+            echo "proceed=true reason=manual ${{ github.event_name }}; Monday 09-12 America/Los_Angeles window applies to schedule only"
             exit 0
           fi
-          hour=$(TZ=America/Los_Angeles date +%H)
-          echo "America/Los_Angeles hour is ${hour}"
-          if [ "$hour" = "09" ]; then
+          if [ "$weekday_num" -eq 1 ] && [ "$hour_num" -ge 9 ] && [ "$hour_num" -le 12 ]; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "proceed=true reason=Monday and hour ${hour} is inside 09-12 America/Los_Angeles"
           else
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping. The Monday send runs only when the America/Los_Angeles hour is 9."
+            why="hour ${hour} is outside 09-12 America/Los_Angeles"
+            if [ "$weekday_num" -ne 1 ]; then
+              why="weekday is ${weekday_name}, not Monday"
+              if [ "$hour_num" -lt 9 ] || [ "$hour_num" -gt 12 ]; then
+                why="${why}; hour ${hour} is outside 09-12 America/Los_Angeles"
+              fi
+            fi
+            echo "proceed=false reason=${why}"
           fi
 
       - uses: actions/checkout@v4

@@ -178,7 +178,9 @@ def test_workflow_sends_monday_at_9am_pacific():
     assert 'cron: "0 16 * * 1"' in text
     assert 'cron: "0 17 * * 1"' in text
     assert "America/Los_Angeles" in text
-    assert '[ "$hour" = "09" ]' in text
+    assert '[ "$weekday_num" -eq 1 ]' in text
+    assert '[ "$hour_num" -ge 9 ]' in text
+    assert '[ "$hour_num" -le 12 ]' in text
     assert "dry_run:" in text
     assert "default: true" in text
     assert "test_to:" in text

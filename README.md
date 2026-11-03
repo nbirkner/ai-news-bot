@@ -56,7 +56,7 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`. A guard step continues only when the current hour in America/Los_Angeles is 9, so daylight saving does not move the send off 9:00.
+Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`, so one of them is 9:00 local in both PST and PDT. On a schedule, the guard continues when the America/Los_Angeles weekday is Monday and the hour is 9 through 12 inclusive. A start an hour or two late still sends. A second run the same Monday does not send again when `state/sent_issues.json` already has that window end.
 
 The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
 
@@ -202,9 +202,9 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 | Day | Monday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
 | UTC crons | `0 16 * * 1` and `0 17 * * 1` |
-| Guard | Continue only when the America/Los_Angeles hour is 9 |
+| Guard | On schedule, continue when America/Los_Angeles is Monday and the hour is 9 through 12 |
 
-GitHub's scheduler is UTC and does not follow daylight saving. The two crons fire an hour apart, and the guard drops the one that is not 9:00 on the Pacific clock. A manual run is not subject to the guard.
+GitHub's scheduler is UTC and does not follow daylight saving. The two crons stay an hour apart so one of them is 9:00 Pacific in both standard time and daylight time. The guard keeps a scheduled run when that clock is Monday and the hour is 9, 10, 11, or 12, which covers a late Actions start through noon. It skips any other weekday or hour. A manual run is not subject to the guard. If both crons land inside the window, the second run sees the issue date in `state/sent_issues.json` and does not broadcast again.
 
 The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 
