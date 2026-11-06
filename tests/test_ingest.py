@@ -138,9 +138,6 @@ def test_lesson_file_becomes_site_mdx(tmp_path, monkeypatch):
     assert lesson.slug == "lost-in-the-middle"
     monkeypatch.setenv("LESSON_WEEKLY_DIR", str(lesson_dir))
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
-    monkeypatch.delenv("RESEND_LESSONS_AUDIENCE_ID", raising=False)
-    monkeypatch.delenv("RESEND_AUDIENCE_ID", raising=False)
     monkeypatch.setattr(
         "src.resend_send.requests.post",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("resend")),
@@ -153,9 +150,7 @@ def test_lesson_file_becomes_site_mdx(tmp_path, monkeypatch):
     assert "slug: lost-in-the-middle" in mdx
     assert mdx.startswith("---\n")
     assert "## Try this" in mdx
-    html = (tmp_path / "out" / "2026-10-20-lost-in-the-middle.html").read_text(encoding="utf-8")
-    assert "AI Lessons, October 20, 2026" in html
-    assert "Roboto" in html
+    assert not (tmp_path / "out" / "2026-10-20-lost-in-the-middle.html").exists()
     refused = main(["main_newsletter.py", "--mode", "lesson", "--send", "--date", "2026-10-20"])
     assert refused == 2
 
@@ -198,38 +193,20 @@ def test_week_lesson_is_optional_and_skips_other_weeks(tmp_path):
     assert "This week's lesson" in html
 
 
-def test_lessons_workflow_sends_tuesday_at_9am_pacific():
-    text = Path(".github/workflows/lessons.yml").read_text(encoding="utf-8")
-    assert 'cron: "0 16 * * 2"' in text
-    assert 'cron: "0 17 * * 2"' in text
-    assert 'cron: "0 16 * * 1"' not in text
-    assert 'cron: "0 17 * * 1"' not in text
-    assert '[ "$hour" = "09" ]' in text
-    assert "America/Los_Angeles" in text
-    assert "--mode lesson" in text
-    assert "--dry-run" in text
-    assert "--send" in text
-    assert "dry_run:" in text
-    assert "default: true" in text
-    assert "test_to:" in text
-    assert "RESEND_API_KEY" in text
-    assert "RESEND_LESSONS_AUDIENCE_ID" in text
-    assert "RESEND_LESSONS_FROM" in text
-    assert "secrets.RESEND_AUDIENCE_ID" not in text
-    assert "RESEND_AUDIENCE_ID:" not in text
-    assert "contents: read" in text
-    assert "lessons-state-" in text
-    assert "steps.lesson.outputs.sent == 'true'" in text
-    assert "SLACK" not in text
-    assert "SITE_REPO" not in text
-    assert "git commit" not in text
-    assert "git push" not in text
+def test_there_is_no_tuesday_lessons_email():
+    assert not Path(".github/workflows/lessons.yml").exists()
+    assert not Path("scripts/create_lessons_audience.py").exists()
+    monday = Path(".github/workflows/briefing.yml").read_text(encoding="utf-8")
+    assert "RESEND_LESSONS" not in monday
+    assert 'cron: "0 16 * * 2"' not in monday
+    assert 'cron: "0 17 * * 2"' not in monday
 
 
 def test_monday_send_workflow_is_unchanged():
     text = Path(".github/workflows/briefing.yml").read_text(encoding="utf-8")
     assert 'cron: "0 16 * * 1"' in text
     assert 'cron: "0 17 * * 1"' in text
+    assert "09-12" in text
     assert "--send" in text
     assert "--test-to" not in text
     assert "test_to:" in text
