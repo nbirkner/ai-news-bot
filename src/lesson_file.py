@@ -18,7 +18,7 @@ from src.newsletter import _yaml_quote
 LESSON_WEEKLY_DIR = Path("/cursor/stores/bot/ai-lessons-weekly")
 PACIFIC = ZoneInfo("America/Los_Angeles")
 LEVELS = ("Foundations", "Systems", "Frontier")
-WEB_ROOT = "https://nikibirkner.com/ai-lessons"
+WEB_ROOT = "https://www.nikibirkner.com/ai-lessons"
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){1,4}$")
 _FILENAME = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})-(?P<slug>[a-z0-9]+(?:-[a-z0-9]+){1,4})\.md$"
@@ -64,7 +64,8 @@ class LessonFile:
 
     @property
     def web_url(self) -> str:
-        return f"{WEB_ROOT}/{self.date}-{self.slug}"
+        """Live lesson page. The site publishes at /ai-lessons/{slug}/."""
+        return f"{WEB_ROOT}/{self.slug}/"
 
 
 def lesson_weekly_dir() -> Path:

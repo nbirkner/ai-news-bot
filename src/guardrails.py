@@ -106,6 +106,20 @@ def issue_text(issue) -> str:
     return "\n".join(parts)
 
 
+def public_text_reasons(text: str) -> list:
+    """Together-internal copy, secrets, and confidential wording.
+
+    The same checks ``publishing_blocks`` uses on a Monday issue.
+    """
+    blob = text or ""
+    reasons = []
+    if _TOGETHER.search(blob):
+        reasons.append("together internal or non-public")
+    if _UNSAFE.search(blob) or _SECRET.search(blob) or _PRIVATE_WORDS.search(blob):
+        reasons.append("unsafe content")
+    return reasons
+
+
 def item_block_reasons(item) -> list:
     """Hard blocks. A hit here stops the issue, it does not just drop the story."""
     text = " ".join([
@@ -114,12 +128,7 @@ def item_block_reasons(item) -> list:
         item.why_it_matters or "",
         item.url or "",
     ])
-    reasons = []
-    if _TOGETHER.search(text):
-        reasons.append("together internal or non-public")
-    if _UNSAFE.search(text) or _SECRET.search(text) or _PRIVATE_WORDS.search(text):
-        reasons.append("unsafe content")
-    return reasons
+    return public_text_reasons(text)
 
 
 def item_drop_reasons(item) -> list:
@@ -172,10 +181,9 @@ def publishing_blocks(
     for item in issue.items:
         reasons.extend(item_block_reasons(item))
     blob = issue_text(issue)
-    if _TOGETHER.search(blob) and "together internal or non-public" not in reasons:
-        reasons.append("together internal or non-public")
-    if (_UNSAFE.search(blob) or _SECRET.search(blob) or _PRIVATE_WORDS.search(blob)) and "unsafe content" not in reasons:
-        reasons.append("unsafe content")
+    for reason in public_text_reasons(blob):
+        if reason not in reasons:
+            reasons.append(reason)
     if not issue.items:
         reasons.append("too short")
     elif is_duplicate_issue(issue, recent):

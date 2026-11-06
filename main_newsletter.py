@@ -38,6 +38,7 @@ import yaml
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
+from src.lesson_public import assert_lesson_is_live, lesson_body_blocks
 from src.newsletter import (
     email_subject,
     lesson_email_subject,
@@ -158,6 +159,13 @@ def run_lesson(argv) -> int:
         blocked.write_text(exc.line + "\n", encoding="utf-8")
         print(exc.line)
         return 2
+    blocks = lesson_body_blocks(lesson)
+    if blocks:
+        reason = LessonBlocked(blocks[0])
+        blocked = out / f"{date}.blocked.txt"
+        blocked.write_text(reason.line + "\n", encoding="utf-8")
+        print(reason.line)
+        return 2
     stem = f"{lesson.date}-{lesson.slug}"
     (out / f"{stem}.mdx").write_text(render_lesson_mdx(lesson), encoding="utf-8")
     (out / f"{stem}.html").write_text(render_lesson_email(lesson, broadcast=True), encoding="utf-8")
@@ -184,6 +192,12 @@ def run_lesson(argv) -> int:
     subject = lesson_email_subject(lesson)
     if not subject:
         print("The lesson has no subject. Not sending.", file=sys.stderr)
+        return 2
+    try:
+        assert_lesson_is_live(lesson)
+    except LessonBlocked as exc:
+        print(exc.line, file=sys.stderr)
+        print("Not sending.", file=sys.stderr)
         return 2
     state_dir = _state_dir()
     sent_path = state_dir / "sent_lessons.json"

@@ -25,6 +25,16 @@ class Response:
         return self._payload
 
 
+class Page:
+    def __init__(self, status, text):
+        self.status_code = status
+        self.text = text
+
+
+LIVE_URL = "https://www.nikibirkner.com/ai-lessons/lost-in-the-middle/"
+LIVE_TITLE = "Models miss the middle of a long prompt."
+
+
 @pytest.fixture(autouse=True)
 def _clean_lesson_env(monkeypatch):
     for name in (
@@ -60,6 +70,13 @@ def _install(monkeypatch, tmp_path, post=None):
         raise AssertionError(url)
 
     monkeypatch.setattr("src.resend_send.requests.post", fake_post)
+
+    def fake_get(url, timeout=None, headers=None):
+        if url != LIVE_URL:
+            raise AssertionError(url)
+        return Page(200, f"<html><title>Lost in the middle · Niki Birkner</title><h1>{LIVE_TITLE}</h1></html>")
+
+    monkeypatch.setattr("src.lesson_public.requests.get", fake_get)
     monkeypatch.setenv("LESSON_WEEKLY_DIR", str(lesson_dir))
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
@@ -89,7 +106,14 @@ def test_assert_lessons_audience_refuses_the_news_list():
 
 
 def test_dry_run_writes_the_letter_and_does_not_call_resend(tmp_path, monkeypatch):
+    fetched = []
+
+    def fake_get(url, timeout=None, headers=None):
+        fetched.append(url)
+        raise AssertionError(url)
+
     calls, output = _install(monkeypatch, tmp_path)
+    monkeypatch.setattr("src.lesson_public.requests.get", fake_get)
     monkeypatch.setenv("RESEND_API_KEY", "re_test")
     monkeypatch.setenv("RESEND_LESSONS_AUDIENCE_ID", LESSONS_AUDIENCE)
     monkeypatch.setenv("RESEND_AUDIENCE_ID", NEWS_AUDIENCE)
@@ -98,6 +122,7 @@ def test_dry_run_writes_the_letter_and_does_not_call_resend(tmp_path, monkeypatc
     code = main(["main_newsletter.py", "--mode", "lesson", "--dry-run", "--send", "--date", DATE])
     assert code == 0
     assert calls == []
+    assert fetched == []
     assert not (tmp_path / "state" / "sent_lessons.json").exists()
     assert output.read_text() == ""
     html = (tmp_path / "out" / "2026-10-20-lost-in-the-middle.html").read_text(encoding="utf-8")
@@ -119,6 +144,121 @@ def test_missing_audience_does_not_fall_back_to_news(tmp_path, monkeypatch, caps
     assert "re_test" not in err
     assert not (tmp_path / "state" / "sent_lessons.json").exists()
     assert (tmp_path / "out" / "2026-10-20-lost-in-the-middle.html").exists()
+
+
+def _private_lesson(tmp_path, monkeypatch, sentence):
+    lesson_dir = tmp_path / "lessons"
+    lesson_dir.mkdir()
+    text = LESSON.read_text(encoding="utf-8").replace(
+        "## How it works\n",
+        "## How it works\n\n" + sentence + "\n",
+        1,
+    )
+    (lesson_dir / "2026-10-20-lost-in-the-middle.md").write_text(text, encoding="utf-8")
+    monkeypatch.setenv("LESSON_WEEKLY_DIR", str(lesson_dir))
+    monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("RESEND_LESSONS_AUDIENCE_ID", LESSONS_AUDIENCE)
+    monkeypatch.setenv("RESEND_AUDIENCE_ID", NEWS_AUDIENCE)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("network")
+
+    monkeypatch.setattr("src.resend_send.requests.post", boom)
+    monkeypatch.setattr("src.lesson_public.requests.get", boom)
+
+
+def _assert_body_refused(tmp_path, monkeypatch, capsys, sentence, reason):
+    _private_lesson(tmp_path, monkeypatch, sentence)
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--mode", "lesson", "--send", "--date", DATE])
+    assert code == 2
+    blocked = (tmp_path / "out" / f"{DATE}.blocked.txt").read_text(encoding="utf-8")
+    assert blocked == f"BLOCKED: {reason}\n"
+    assert capsys.readouterr().out == blocked
+    assert not list((tmp_path / "out").glob("*.html"))
+    assert not (tmp_path / "state" / "sent_lessons.json").exists()
+
+
+def test_together_internal_lesson_does_not_send(tmp_path, monkeypatch, capsys):
+    _assert_body_refused(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "Why it matters for Together: revenue from customers is up.",
+        "together internal or non-public",
+    )
+
+
+def test_confidential_lesson_does_not_send(tmp_path, monkeypatch, capsys):
+    _assert_body_refused(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "This note is confidential and internal only.",
+        "unsafe content",
+    )
+
+
+def test_secret_lesson_does_not_send(tmp_path, monkeypatch, capsys):
+    _assert_body_refused(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "The token is sk-" + ("a" * 24) + ".",
+        "unsafe content",
+    )
+
+
+def test_notion_url_in_the_body_does_not_send(tmp_path, monkeypatch, capsys):
+    _assert_body_refused(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "The draft still points at https://www.notion.so/Private-Curriculum-abc.",
+        "a Notion URL is in the lesson",
+    )
+
+
+def test_unpublished_page_does_not_send(tmp_path, monkeypatch, capsys):
+    _install(monkeypatch, tmp_path)
+    _forbid(monkeypatch)
+
+    def get(url, timeout=None, headers=None):
+        assert url == LIVE_URL
+        return Page(404, "missing")
+
+    monkeypatch.setattr("src.lesson_public.requests.get", get)
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("RESEND_LESSONS_AUDIENCE_ID", LESSONS_AUDIENCE)
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--mode", "lesson", "--send", "--date", DATE])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "BLOCKED: the live lesson page is not published" in err
+    assert "Not sending." in err
+    assert not (tmp_path / "state" / "sent_lessons.json").exists()
+
+
+def test_live_title_mismatch_does_not_send(tmp_path, monkeypatch, capsys):
+    _install(monkeypatch, tmp_path)
+    _forbid(monkeypatch)
+
+    def get(url, timeout=None, headers=None):
+        assert url == LIVE_URL
+        return Page(200, "<h1>A different public lesson.</h1>")
+
+    monkeypatch.setattr("src.lesson_public.requests.get", get)
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("RESEND_LESSONS_AUDIENCE_ID", LESSONS_AUDIENCE)
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--mode", "lesson", "--send", "--date", DATE])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "BLOCKED: the live lesson title does not match" in err
+    assert "Not sending." in err
+    assert not (tmp_path / "state" / "sent_lessons.json").exists()
 
 
 def test_news_audience_id_is_refused(tmp_path, monkeypatch, capsys):
@@ -227,7 +367,7 @@ def test_test_to_sends_one_email_and_skips_both_audiences(tmp_path, monkeypatch)
     assert call["json"]["to"] == ["niki@example.com"]
     assert call["json"]["subject"] == "AI Lessons, October 20, 2026"
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" not in call["json"]["html"]
-    assert "https://nikibirkner.com/ai-lessons/2026-10-20-lost-in-the-middle" in call["json"]["html"]
+    assert LIVE_URL in call["json"]["html"]
     assert NEWS_AUDIENCE not in call["json"]["html"]
     assert not (tmp_path / "state" / "sent_lessons.json").exists()
     assert "sent=true" not in output.read_text()
@@ -284,9 +424,10 @@ def test_lesson_letter_matches_the_news_type(tmp_path):
     )
     preview = render_lesson_email(lesson, broadcast=False)
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" not in preview
-    assert "Unsubscribe\nhttps://nikibirkner.com/ai-lessons/2026-10-20-lost-in-the-middle\n" in render_lesson_plain(
+    assert f"Unsubscribe\n{LIVE_URL}\n" in render_lesson_plain(
         lesson, broadcast=False
     )
+    assert lesson.web_url == LIVE_URL
 
 
 def test_create_lessons_segment_reuses_the_named_segment_and_skips_general(monkeypatch):

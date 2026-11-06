@@ -105,7 +105,7 @@ def test_script_writes_sources_and_email_with_optional_lesson(tmp_path):
     assert "Roboto" in lesson_heading
     assert "Fragment Mono" not in lesson_heading
     assert "Models miss the middle of a long prompt." in html
-    assert "https://nikibirkner.com/ai-lessons/2026-10-20-lost-in-the-middle" in html
+    assert "https://www.nikibirkner.com/ai-lessons/lost-in-the-middle/" in html
     assert "This week's lesson" in mdx
     assert "This week's lesson" in plain
     assert "AI Lessons," not in html
