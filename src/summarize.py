@@ -760,19 +760,170 @@ def _call_together(prompt: str, api_key: str, model: str) -> str:
     return meta["content"]
 
 
-def _parse_json_object(text: str) -> dict | None:
-    cleaned = text.strip()
+def _strip_model_wrappers(text: str) -> str:
+    """Drop think tags and markdown fences GLM leaves around the JSON."""
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.I | re.S)
+    cleaned = re.sub(r"^.*?</think>", "", cleaned, count=1, flags=re.I | re.S)
+    cleaned = cleaned.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start < 0 or end <= start:
+    return cleaned.strip()
+
+
+def _scan_json(text: str, start: int) -> int | None:
+    """End index (exclusive) of the JSON value that starts at `start`."""
+    pairs = {"{": "}", "[": "]"}
+    stack = []
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return index + 1
+            continue
+        if char in "}]":
+            return None
+    return None
+
+
+def _json_values(text: str) -> list:
+    """Every balanced JSON object or array in `text`, outer values only."""
+    found = []
+    index = 0
+    while index < len(text):
+        if text[index] not in "{[":
+            index += 1
+            continue
+        end = _scan_json(text, index)
+        if end is None:
+            index += 1
+            continue
+        try:
+            found.append(json.loads(text[index:end]))
+        except json.JSONDecodeError:
+            pass
+        index = end
+    return found
+
+
+def _prefer_payload(values: list):
+    """The last object that looks like the briefing. Thinking comes first."""
+    dicts = [value for value in values if isinstance(value, dict)]
+
+    def has_rows(value: dict) -> bool:
+        items = value.get("items")
+        return isinstance(items, list) and len(items) > 0
+
+    for value in reversed(dicts):
+        if has_rows(value):
+            return value
+    for value in reversed(dicts):
+        if any(key in value for key in ("items", "item", "stories", "articles")):
+            return value
+    if dicts:
+        return dicts[-1]
+    lists = [value for value in values if isinstance(value, list)]
+    if lists:
+        return {"items": lists[-1]}
+    return None
+
+
+def _looks_like_item(value) -> bool:
+    return isinstance(value, dict) and any(
+        key in value for key in ("index", "headline", "body", "why_it_matters", "what_happened")
+    )
+
+
+def _as_item_list(value):
+    """A list, one item object, a map of items, or a JSON string of those."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text[0] not in "{[":
+            return None
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            loaded = _prefer_payload(_json_values(text))
+        if loaded is None or loaded is value:
+            return None
+        return _as_item_list(loaded)
+    if isinstance(value, dict):
+        if "items" in value and not _looks_like_item(value):
+            nested = _as_item_list(value.get("items"))
+            if nested is not None:
+                return nested
+        if _looks_like_item(value):
+            return [value]
+        rows = [row for row in value.values() if _looks_like_item(row)]
+        if rows and len(rows) == len(value):
+            return rows
+    return None
+
+
+def _normalize_index(row):
+    if not isinstance(row, dict):
+        return row
+    index = row.get("index")
+    if isinstance(index, str) and re.fullmatch(r"-?\d+", index.strip()):
+        row = dict(row)
+        row["index"] = int(index.strip())
+    return row
+
+
+def _coerce_payload(payload):
+    """Turn the shapes GLM actually returns into `{items: [...]}`."""
+    if isinstance(payload, list):
+        print("Warning: LLM output was a list. Wrapping it as items.", file=sys.stderr)
+        payload = {"items": payload}
+    if not isinstance(payload, dict):
+        return payload
+    payload = dict(payload)
+    if "items" not in payload:
+        for key in ("item", "stories", "articles"):
+            if key in payload:
+                print(f"Warning: LLM used {key!r} instead of items.", file=sys.stderr)
+                payload["items"] = payload.pop(key)
+                break
+    items = payload.get("items")
+    coerced = _as_item_list(items)
+    if coerced is None:
+        return payload
+    if coerced is not items:
+        print(
+            f"Warning: LLM items field was {type(items).__name__}. "
+            f"Using a list of {len(coerced)}.",
+            file=sys.stderr,
+        )
+    payload["items"] = [_normalize_index(row) for row in coerced]
+    return payload
+
+
+def _parse_json_object(text: str) -> dict | None:
+    cleaned = _strip_model_wrappers(text)
+    payload = _prefer_payload(_json_values(cleaned))
+    if payload is None:
         return None
-    try:
-        payload = json.loads(cleaned[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
+    coerced = _coerce_payload(payload)
+    return coerced if isinstance(coerced, dict) else None
 
 
 def _item_payload(article: Article, index: int) -> dict:
@@ -1149,9 +1300,22 @@ def _body_length_note(row: dict) -> str:
     return f"index {row.get('index')} has {count} sentence(s), about {tokens} tokens"
 
 
+def _items_kind(payload) -> str:
+    if payload is None:
+        return "no JSON object"
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    if "items" not in payload:
+        return "missing"
+    return type(payload.get("items")).__name__
+
+
 def _require_schema(payload) -> None:
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-        raise SchemaError("LLM output failed schema validation: items must be a list")
+        raise SchemaError(
+            "LLM output failed schema validation: items must be a list "
+            f"(got {_items_kind(payload)})"
+        )
     for row in payload["items"]:
         if not isinstance(row, dict):
             raise SchemaError("LLM output failed schema validation: item is not an object")
@@ -1184,28 +1348,44 @@ Do not stop after one sentence. Return JSON only.
 """
 
 
+def _items_repair_prompt(prompt: str, exc: SchemaError) -> str:
+    return prompt + f"""
+
+The previous draft was rejected: {exc}.
+Return JSON only, with this shape and no other top-level type:
+{{"lede": "...", "items": [{{"index": 0, "headline": "...", "body": "...", "why_it_matters": "..."}}]}}
+"items" must be a JSON list of objects, even when there is only one story. Do not return a single object, a string, or null.
+Every body must be 2 to 3 complete sentences using only that item's text and its brief reflection.
+If an item cannot support 2 factual sentences, omit it.
+"""
+
+
+def _still_invalid(exc: SchemaError, *, short_body: bool) -> SchemaError:
+    text = str(exc)
+    if short_body or "at least 2 sentences" in text:
+        return SchemaError(f"{text} Retried once; the body is still too short to publish.")
+    return SchemaError(f"{text} Retried once; the items schema is still invalid.")
+
+
 def _schema_or_retry(payload, prompt: str, api_key: str, model: str):
-    """Accept a full body. One rewrite if a body is still under 3 sentences."""
+    """Accept a full body. One rewrite if the schema is still wrong."""
+    payload = _coerce_payload(payload)
     try:
         _require_schema(payload)
         return payload
     except SchemaError as exc:
-        if "at least 2 sentences" not in str(exc):
-            raise
+        short_body = "at least 2 sentences" in str(exc)
         print(f"Warning: {exc} Retrying once.", file=sys.stderr)
+        repair = _repair_prompt(prompt, payload) if short_body else _items_repair_prompt(prompt, exc)
         try:
-            raw = _call_together(_repair_prompt(prompt, payload), api_key, model)
+            raw = _call_together(repair, api_key, model)
         except SchemaError as again:
-            raise SchemaError(
-                f"{again} Retried once; the body is still too short to publish."
-            ) from again
-        retried = _parse_json_object(raw)
+            raise _still_invalid(again, short_body=short_body) from again
+        retried = _coerce_payload(_parse_json_object(raw))
         try:
             _require_schema(retried)
         except SchemaError as again:
-            raise SchemaError(
-                f"{again} Retried once; the body is still too short to publish."
-            ) from again
+            raise _still_invalid(again, short_body=short_body) from again
         return retried
 
 
@@ -1580,14 +1760,18 @@ def _compose_group(
         return "", []
 
     pairs = _backfill_clear_bar(pool or articles, pairs, limit)
+    raw_lede = payload.get("lede") if isinstance(payload, dict) else ""
+    return _publish_lede(raw_lede, pairs, since, until), pairs
 
+
+def _publish_lede(lede: str, pairs: list, since, until) -> str:
     combined = "\n".join(_source_text(row[0]) for row in pairs)
-    lede = fit_lede(clean_line(str((payload or {}).get("lede") or ""), limit=420), since, until)
-    if _DANGLING_END.search(lede or ""):
-        lede = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
-    check = re.sub(r"^Since Monday morning,?\s*", "", lede, flags=re.I)
-    if not line_is_grounded(check or lede, combined, analysis=True) or not lede_names_stories(lede, pairs):
-        lede = fit_lede(story_lede(pairs), since, until)
+    text = fit_lede(clean_line(str(lede or ""), limit=420), since, until)
+    if _DANGLING_END.search(text or ""):
+        text = fit_lede(theme_lede([row[0] for row in pairs]), since, until)
+    check = re.sub(r"^Since Monday morning,?\s*", "", text, flags=re.I)
+    if not line_is_grounded(check or text, combined, analysis=True) or not lede_names_stories(text, pairs):
+        text = fit_lede(story_lede(pairs), since, until)
     openai = next(
         (
             row[0] for row in pairs
@@ -1596,28 +1780,57 @@ def _compose_group(
         None,
     )
     if openai is not None:
-        lede = fix_openai_wording(lede, openai)
-    return lede, pairs
+        text = fix_openai_wording(text, openai)
+    return text
 
 
-def _rank_finalists(articles: list, api_key: str, model: str, **kwargs) -> list:
-    """Rank the shortlist in batches so one call is not the full page text."""
+def _trim_finalists(chosen: list, pairs: list) -> tuple:
+    if len(chosen) <= _RANK_BATCH:
+        return chosen, pairs
+    priority = [article for article in chosen if _CLEAR_BAR.search(article.title or "")]
+    rest = [article for article in chosen if article not in priority]
+    chosen = (priority + rest)[:_RANK_BATCH]
+    by_id = {id(row[0]): row for row in pairs}
+    pairs = [by_id[id(article)] for article in chosen if id(article) in by_id]
+    return chosen, pairs
+
+
+def _rank_finalists(articles: list, api_key: str, model: str, **kwargs) -> tuple:
+    """Rank the shortlist in batches so one call is not the full page text.
+
+    Returns (finalists, pairs already accepted). One batch that fails schema
+    does not discard the batches that succeeded. Every batch failing still raises.
+    """
     if len(articles) <= _RANK_BATCH:
-        return articles
+        return articles, []
     from src.dedupe import same_story
     chosen = []
+    kept = []
+    failures = []
+    accepted_any = False
     for start in range(0, len(articles), _RANK_BATCH):
-        _lede, pairs = _compose_group(articles[start:start + _RANK_BATCH], api_key, model, **kwargs)
+        batch = articles[start:start + _RANK_BATCH]
+        try:
+            _lede, pairs = _compose_group(batch, api_key, model, **kwargs)
+        except SchemaError as exc:
+            failures.append(exc)
+            print(
+                f"Warning: ranking batch {start // _RANK_BATCH + 1} "
+                f"({len(batch)} stories) failed schema validation: {exc} "
+                "Continuing with the other batches.",
+                file=sys.stderr,
+            )
+            continue
+        accepted_any = True
         for row in pairs:
             article = row[0]
             if any(same_story(article, previous) for previous in chosen):
                 continue
             chosen.append(article)
-    if len(chosen) <= _RANK_BATCH:
-        return chosen
-    priority = [article for article in chosen if _CLEAR_BAR.search(article.title or "")]
-    rest = [article for article in chosen if article not in priority]
-    return (priority + rest)[:_RANK_BATCH]
+            kept.append(row)
+    if not accepted_any and failures:
+        raise failures[-1]
+    return _trim_finalists(chosen, kept)
 
 
 def compose_briefing(
@@ -1636,7 +1849,9 @@ def compose_briefing(
 
     pairs is a list of (article, headline, body, why_it_matters) in rank order.
     A 3-tuple from an older composer is still accepted by the briefing runner.
-    A ranking or writing failure publishes nothing.
+    A ranking or writing failure publishes nothing. One bad batch does not.
+    Stories already accepted from the other batches are kept when the final
+    rewrite also fails schema. The curated sources file is not a publish path.
     """
     if not articles:
         return "", []
@@ -1650,10 +1865,21 @@ def compose_briefing(
         until=until,
     )
     try:
-        finalists = _rank_finalists(articles, api_key, model, **kwargs)
+        finalists, salvaged = _rank_finalists(articles, api_key, model, **kwargs)
         if len(articles) > _RANK_BATCH and not finalists:
             return "", []
-        return _compose_group(finalists, api_key, model, pool=articles, **kwargs)
+        try:
+            return _compose_group(finalists, api_key, model, pool=articles, **kwargs)
+        except SchemaError as exc:
+            kept = list(salvaged or [])[:limit]
+            if not kept:
+                raise
+            print(
+                f"Warning: final ranking pass failed schema validation: {exc} "
+                "Using the stories already accepted from the batch passes.",
+                file=sys.stderr,
+            )
+            return _publish_lede("", kept, since, until), kept
     except AuthError:
         if strict_auth:
             raise
