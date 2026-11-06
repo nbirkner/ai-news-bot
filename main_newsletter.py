@@ -8,13 +8,18 @@ Slack and it does not publish the site.
     python main_newsletter.py --dry-run --window-end 2026-10-19
     python main_newsletter.py --send --window-end 2026-10-19
     python main_newsletter.py --mode lesson --dry-run --date 2026-10-20
+    python main_newsletter.py --mode lesson --send --date 2026-10-20
 
-`--mode lesson` reads one Learning-bot lesson file and writes site MDX.
-It never sends. The default mode is still the Monday news issue.
+`--mode lesson` reads one Learning-bot lesson file and writes site MDX and
+the lesson email. `--send` broadcasts that email to RESEND_LESSONS_AUDIENCE_ID.
+It does not read RESEND_AUDIENCE_ID as the destination. A missing lessons
+audience, or the AI News audience, fails closed and does not call Resend.
+The default mode is still the Monday news issue.
 
 Reads TOGETHER_API_KEY (a personal key, not a company key) and EXA_API_KEY
-from the environment. A real send also reads RESEND_API_KEY and
-RESEND_AUDIENCE_ID. Missing model keys skip that source and still write ./out/.
+from the environment. A Monday send also reads RESEND_API_KEY and
+RESEND_AUDIENCE_ID. A Tuesday lesson send reads RESEND_API_KEY and
+RESEND_LESSONS_AUDIENCE_ID. Missing model keys skip that source and still write ./out/.
 The Monday run looks for sources/<YYYY-MM-DD>.json (the window end on the
 Pacific calendar) and uses it plus RSS. A missing or invalid file falls back
 to RSS only. Exa runs only when EXA_ENABLED=1, capped by EXA_MAX_CALLS
@@ -33,10 +38,20 @@ import yaml
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
-from src.newsletter import email_subject, render_email, render_mdx, render_plain
+from src.newsletter import (
+    email_subject,
+    lesson_email_subject,
+    render_email,
+    render_lesson_email,
+    render_lesson_plain,
+    render_mdx,
+    render_plain,
+)
 from src.resend_send import (
     SendError,
+    assert_lessons_audience,
     create_broadcast,
+    lessons_from_address,
     send_broadcast,
     send_test_email,
 )
@@ -117,9 +132,9 @@ def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retenti
 
 
 def run_lesson(argv) -> int:
-    """Copy one lesson file into ./out as site MDX. Sending is hard-disabled."""
-    if "--send" in argv or "--post" in argv or "--publish" in argv:
-        print("Lesson mode never sends, posts, or publishes.", file=sys.stderr)
+    """Write one lesson as site MDX and email. Broadcast only to its own audience."""
+    if "--post" in argv or "--publish" in argv:
+        print("Lesson mode does not post or publish.", file=sys.stderr)
         return 2
     raw_date = _flag(argv, "--date")
     if raw_date:
@@ -131,6 +146,9 @@ def run_lesson(argv) -> int:
         date = raw_date
     else:
         date = pacific_today()
+    sending = send_enabled(argv)
+    if not sending and (test_recipient(argv) or "--test-to" in argv):
+        print("Dry run: not sending the test email.", file=sys.stderr)
     out = Path(os.environ.get("OUT_DIR") or "out")
     out.mkdir(parents=True, exist_ok=True)
     try:
@@ -140,10 +158,80 @@ def run_lesson(argv) -> int:
         blocked.write_text(exc.line + "\n", encoding="utf-8")
         print(exc.line)
         return 2
-    dest = out / f"{lesson.date}-{lesson.slug}.mdx"
-    dest.write_text(render_lesson_mdx(lesson), encoding="utf-8")
-    print(f"Wrote {dest}", file=sys.stderr)
-    print("Dry run: nothing was posted or sent.", file=sys.stderr)
+    stem = f"{lesson.date}-{lesson.slug}"
+    (out / f"{stem}.mdx").write_text(render_lesson_mdx(lesson), encoding="utf-8")
+    (out / f"{stem}.html").write_text(render_lesson_email(lesson, broadcast=True), encoding="utf-8")
+    (out / f"{stem}.txt").write_text(render_lesson_plain(lesson, broadcast=True), encoding="utf-8")
+    print(f"Wrote {out / (stem + '.mdx')}", file=sys.stderr)
+    print(f"Wrote {out / (stem + '.html')}", file=sys.stderr)
+    print(f"Wrote {out / (stem + '.txt')}", file=sys.stderr)
+    if not sending:
+        print("Dry run: nothing was posted or sent.", file=sys.stderr)
+        return 0
+    recipient = test_recipient(argv)
+    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    if not api_key:
+        print("RESEND_API_KEY is not set. Not sending.", file=sys.stderr)
+        return 2
+    if recipient and not _valid_email(recipient):
+        print("--test-to needs one email address.", file=sys.stderr)
+        return 2
+    try:
+        sender = lessons_from_address(os.environ.get("RESEND_LESSONS_FROM") or "")
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    subject = lesson_email_subject(lesson)
+    if not subject:
+        print("The lesson has no subject. Not sending.", file=sys.stderr)
+        return 2
+    state_dir = _state_dir()
+    sent_path = state_dir / "sent_lessons.json"
+    if not recipient:
+        try:
+            audience_id = assert_lessons_audience(
+                os.environ.get("RESEND_LESSONS_AUDIENCE_ID") or "",
+                news_audience_id=os.environ.get("RESEND_AUDIENCE_ID") or "",
+            )
+        except SendError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if issue_already_sent(lesson.date, sent_path):
+            print(f"Already sent {lesson.date}. Not sending again.", file=sys.stderr)
+            return 0
+    try:
+        if recipient:
+            send_test_email(
+                api_key=api_key,
+                to=recipient,
+                subject=subject,
+                html=render_lesson_email(lesson, broadcast=False),
+                text=render_lesson_plain(lesson, broadcast=False),
+                from_address=sender,
+            )
+            print(f"Sent a test email to {recipient}. The broadcast was not sent.", file=sys.stderr)
+            return 0
+        broadcast_id = create_broadcast(
+            api_key=api_key,
+            audience_id=audience_id,
+            subject=subject,
+            html=render_lesson_email(lesson, broadcast=True),
+            text=render_lesson_plain(lesson, broadcast=True),
+            from_address=sender,
+        )
+        send_broadcast(api_key=api_key, broadcast_id=broadcast_id)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        print("Not recording the lesson as sent.", file=sys.stderr)
+        return 2
+    mark_issue_sent(
+        lesson.date,
+        sent_path,
+        broadcast_id=broadcast_id,
+        when=datetime.now(timezone.utc),
+    )
+    _note_sent()
+    print(f"Sent {lesson.date} as broadcast {broadcast_id}.", file=sys.stderr)
     return 0
 
 
