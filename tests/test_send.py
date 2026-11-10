@@ -72,8 +72,16 @@ def _install(monkeypatch, tmp_path, issue=None, failures=None, post=None):
             return Response(200, {"id": "em_123"})
         raise AssertionError(url)
 
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if str(url).rstrip("/").endswith("/emails"):
+            return Response(200, {"object": "list", "has_more": False, "data": []})
+        if str(url).rstrip("/").endswith("/broadcasts"):
+            return Response(200, {"data": []})
+        raise AssertionError(url)
+
     monkeypatch.setattr("main_newsletter.generate_issue", fake_generate)
     monkeypatch.setattr("src.resend_send.requests.post", fake_post)
+    monkeypatch.setattr("src.resend_send.requests.get", fake_get)
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
     output = tmp_path / "github_output.txt"
@@ -134,6 +142,9 @@ def test_broadcast_uses_the_issue_subject_then_sends_once(tmp_path, monkeypatch,
     assert sent["json"] == {}
     saved = json.loads((tmp_path / "state" / "sent_issues.json").read_text())
     assert saved["issues"]["2026-10-19"]["broadcast_id"] == "br_123"
+    assert saved["issues"]["2026-10-19"]["delivery"] == "unverified"
+    assert saved["issues"]["2026-10-19"]["email_id"] == ""
+    assert saved["issues"]["2026-10-19"]["last_event"] == ""
     seen = (tmp_path / "state" / "seen_articles.json").read_text()
     assert "vercel.com/blog/ai-gateway-production-index-october-2026" in seen
     recent = json.loads((tmp_path / "state" / "recent_briefings.json").read_text())
@@ -215,6 +226,91 @@ def test_test_to_sends_one_email_and_skips_the_broadcast(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "sent_issues.json").exists()
     assert not (tmp_path / "state" / "recent_briefings.json").exists()
     assert "sent=true" not in output.read_text()
+
+
+def test_existing_email_with_last_event_sent_is_not_delivered_and_not_sent_again(tmp_path, monkeypatch):
+    calls, generated, output = _install(monkeypatch, tmp_path)
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if str(url).rstrip("/").endswith("/emails"):
+            return Response(200, {
+                "object": "list",
+                "has_more": False,
+                "data": [{
+                    "id": "em_nov",
+                    "subject": "AI News, October 19, 2026",
+                    "last_event": "sent",
+                }],
+            })
+        raise AssertionError(url)
+
+    monkeypatch.setattr("src.resend_send.requests.get", fake_get)
+    _send_env(monkeypatch)
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
+    assert code == 0
+    assert calls == []
+    assert generated == []
+    saved = json.loads((tmp_path / "state" / "sent_issues.json").read_text())
+    row = saved["issues"]["2026-10-19"]
+    assert row["email_id"] == "em_nov"
+    assert row["last_event"] == "sent"
+    assert row["delivery"] == "submitted"
+    assert "sent=true" in output.read_text()
+
+
+def test_verify_delivery_reads_last_event_and_does_not_post(tmp_path, monkeypatch):
+    calls, generated, _output = _install(monkeypatch, tmp_path)
+    gets = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        gets.append(url)
+        if str(url).endswith("/emails/em_old"):
+            return Response(200, {
+                "id": "em_old",
+                "subject": "AI News, October 19, 2026",
+                "last_event": "delivered",
+            })
+        raise AssertionError(url)
+
+    monkeypatch.setattr("src.resend_send.requests.get", fake_get)
+    _send_env(monkeypatch)
+    sent = tmp_path / "state" / "sent_issues.json"
+    sent.parent.mkdir(parents=True)
+    sent.write_text(json.dumps({
+        "issues": {
+            "2026-10-19": {
+                "broadcast_id": "br_old",
+                "email_id": "em_old",
+                "last_event": "",
+                "delivery": "unverified",
+            },
+        },
+    }))
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--verify-delivery", "--window-end", "2026-10-19"])
+    assert code == 0
+    assert calls == []
+    assert generated == []
+    assert gets == ["https://api.resend.com/emails/em_old"]
+    row = json.loads(sent.read_text())["issues"]["2026-10-19"]
+    assert row["email_id"] == "em_old"
+    assert row["broadcast_id"] == "br_old"
+    assert row["last_event"] == "delivered"
+    assert row["delivery"] == "delivered"
+
+
+def test_verify_delivery_treats_a_missing_email_as_not_submitted(tmp_path, monkeypatch):
+    calls, _generated, _output = _install(monkeypatch, tmp_path)
+    _send_env(monkeypatch)
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--verify-delivery", "--window-end", "2026-11-09"])
+    assert code == 2
+    assert calls == []
+    assert not (tmp_path / "state" / "sent_issues.json").exists()
+    code = main(["main_newsletter.py", "--verify-delivery", "--send", "--window-end", "2026-11-09"])
+    assert code == 2
+    assert calls == []
 
 
 def test_readme_names_the_resend_secrets():

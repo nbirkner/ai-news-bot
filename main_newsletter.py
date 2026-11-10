@@ -27,6 +27,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -34,13 +35,22 @@ from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
 from src.newsletter import email_subject, render_email, render_mdx, render_plain
-from src.resend_send import SendError, create_broadcast, send_broadcast, send_test_email
+from src.resend_send import (
+    SendError,
+    create_broadcast,
+    find_broadcast,
+    find_email,
+    get_email,
+    send_broadcast,
+    send_test_email,
+)
 from src.state import (
     issue_already_sent,
     load_seen,
     mark_issue_sent,
     mark_seen,
     prune_old,
+    record_provider_delivery,
     remember_issue,
     save_last_run,
     save_seen,
@@ -92,13 +102,29 @@ def _valid_email(address: str) -> bool:
     return "@" in text and " " not in text and not text.startswith("@") and not text.endswith("@")
 
 
-def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retention_days: int) -> None:
-    """Persist the issue date and the article memory. Only after Resend accepts the send."""
+def record_successful_send(
+    issue,
+    state_dir: Path,
+    *,
+    broadcast_id: str,
+    retention_days: int,
+    email_id: str = "",
+    last_event: str = "",
+    delivery: str = "unverified",
+) -> None:
+    """Persist the issue date and the article memory.
+
+    Call this only after Resend accepts the send. Acceptance stores the
+    broadcast id with delivery `unverified`. Inbox delivery is a later GET.
+    """
     now = datetime.now(timezone.utc)
     mark_issue_sent(
         issue.date,
         state_dir / "sent_issues.json",
         broadcast_id=broadcast_id,
+        email_id=email_id,
+        last_event=last_event,
+        delivery=delivery,
         when=now,
     )
     seen_path = state_dir / "seen_articles.json"
@@ -109,6 +135,144 @@ def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retenti
     save_seen(prune_old(seen, retention_days=retention_days), seen_path)
     save_last_run(issue.until or now, state_dir / "last_briefing.json")
     remember_issue(issue, state_dir / "recent_briefings.json", when=now)
+
+
+def _subject_for(date: str) -> str:
+    return email_subject(SimpleNamespace(date=date))
+
+
+def provider_hold(date: str, api_key: str, state_dir: Path) -> str:
+    """Return `skip`, a draft broadcast id, or ``""`` when a new broadcast is allowed.
+
+    An email object, or a broadcast already submitted, means do not send again.
+    last_event `sent` is stored as submitted, not delivered. A draft id is
+    returned so the caller can send that draft instead of creating a second one.
+    A missing email on a complete list means this issue was never submitted.
+    """
+    subject = _subject_for(date)
+    if not subject:
+        return ""
+    try:
+        email = find_email(api_key=api_key, subject=subject)
+    except SendError as exc:
+        if "truncated" in str(exc):
+            print(str(exc), file=sys.stderr)
+            print("Not sending, because a partial provider list cannot prove this issue is new.", file=sys.stderr)
+            return "unsure"
+        print(f"Warning: {exc} Not treating that as an existing send.", file=sys.stderr)
+        email = None
+    if email is not None:
+        record_provider_delivery(
+            date,
+            state_dir / "sent_issues.json",
+            email_id=email["id"],
+            last_event=email["last_event"],
+            delivery=email["delivery"],
+        )
+        _note_sent()
+        if email["delivered"]:
+            print(
+                f"Resend email {email['id']} for {subject} is delivered "
+                f"(last_event={email['last_event']}). Not sending again.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Resend email {email['id']} for {subject} exists "
+                f"(last_event={email['last_event'] or 'unknown'}). "
+                "That is not a new send. sent is not delivered.",
+                file=sys.stderr,
+            )
+        return "skip"
+    try:
+        broadcast = find_broadcast(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(f"Warning: {exc} Not treating that as an existing send.", file=sys.stderr)
+        broadcast = None
+    if not broadcast:
+        return ""
+    if broadcast.get("submitted"):
+        record_provider_delivery(
+            date,
+            state_dir / "sent_issues.json",
+            email_id="",
+            last_event="",
+            delivery="submitted",
+            broadcast_id=broadcast["id"],
+        )
+        _note_sent()
+        print(
+            f"Resend broadcast {broadcast['id']} for {subject} was already submitted. "
+            "Delivery is not verified. Not sending again.",
+            file=sys.stderr,
+        )
+        return "skip"
+    if broadcast.get("draft"):
+        print(
+            f"Resend broadcast {broadcast['id']} for {subject} is a draft. Sending that draft.",
+            file=sys.stderr,
+        )
+        return broadcast["id"]
+    return ""
+
+
+def verify_delivery(argv) -> int:
+    """GET the provider email and record last_event. This does not send."""
+    if "--send" in argv or "--post" in argv or "--publish" in argv:
+        print("--verify-delivery does not send.", file=sys.stderr)
+        return 2
+    raw_end = _flag(argv, "--window-end")
+    if not raw_end:
+        print("Usage: python main_newsletter.py --verify-delivery --window-end YYYY-MM-DD", file=sys.stderr)
+        return 2
+    try:
+        until = parse_window_end(raw_end)
+    except ValueError as exc:
+        print(f"Could not parse --window-end: {exc}", file=sys.stderr)
+        return 2
+    date = until.strftime("%Y-%m-%d")
+    subject = _subject_for(date)
+    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    if not api_key:
+        print("RESEND_API_KEY is not set. Not checking delivery.", file=sys.stderr)
+        return 2
+    state_dir = _state_dir()
+    sent_path = state_dir / "sent_issues.json"
+    email_id = ""
+    if sent_path.exists():
+        from src.state import load_sent_issues
+        email_id = str((load_sent_issues(sent_path).get(date) or {}).get("email_id") or "")
+    try:
+        if email_id:
+            found = get_email(api_key=api_key, email_id=email_id)
+        else:
+            found = find_email(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not found:
+        print(
+            f"No Resend email for {subject}. The {date} issue was not submitted.",
+            file=sys.stderr,
+        )
+        return 2
+    record_provider_delivery(
+        date,
+        sent_path,
+        email_id=found["id"],
+        last_event=found["last_event"],
+        delivery=found["delivery"],
+    )
+    print(
+        f"Resend email {found['id']} last_event={found['last_event'] or 'unknown'} "
+        f"delivery={found['delivery']}",
+        file=sys.stderr,
+    )
+    if found["delivered"]:
+        print(f"{subject} is delivered.", file=sys.stderr)
+        return 0
+    print("last_event sent is not delivered." if found["last_event"] == "sent" else "Not delivered.", file=sys.stderr)
+    return 2
 
 
 def run_lesson(argv) -> int:
@@ -145,6 +309,8 @@ def run_lesson(argv) -> int:
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     mode = (_flag(argv, "--mode") or "news").strip().lower()
+    if "--verify-delivery" in argv:
+        return verify_delivery(argv)
     if mode == "lesson":
         return run_lesson(argv)
     if mode != "news":
@@ -188,16 +354,43 @@ def main(argv=None) -> int:
     audience_id = (os.environ.get("RESEND_AUDIENCE_ID") or "").strip()
     state_dir = _state_dir()
     sent_path = state_dir / "sent_issues.json"
-    if sending and not recipient and issue_already_sent(until.strftime("%Y-%m-%d"), sent_path):
-        print(f"Already sent {until.strftime('%Y-%m-%d')}. Not sending again.", file=sys.stderr)
+    issue_date = until.strftime("%Y-%m-%d")
+    draft_id = ""
+    if sending and not recipient and issue_already_sent(issue_date, sent_path):
+        print(f"Already sent {issue_date}. Not sending again.", file=sys.stderr)
         return 0
+    if sending and not recipient and api_key:
+        draft_id = provider_hold(issue_date, api_key, state_dir)
+        if draft_id == "unsure":
+            return 2
+        if draft_id == "skip":
+            return 0
+        if draft_id:
+            try:
+                send_broadcast(api_key=api_key, broadcast_id=draft_id)
+            except SendError as exc:
+                print(str(exc), file=sys.stderr)
+                print("Not recording the issue as sent.", file=sys.stderr)
+                return 2
+            mark_issue_sent(
+                issue_date,
+                sent_path,
+                broadcast_id=draft_id,
+                delivery="unverified",
+            )
+            _note_sent()
+            print(
+                f"Submitted existing draft {draft_id} for {issue_date}. Delivery is not verified.",
+                file=sys.stderr,
+            )
+            return 0
+    if sending and not recipient and not api_key:
+        print("RESEND_API_KEY is not set. Not sending.", file=sys.stderr)
+        return 2
     if sending and recipient and not _valid_email(recipient):
         print("--test-to needs one email address.", file=sys.stderr)
         return 2
-    if sending and not api_key:
-        print("RESEND_API_KEY is not set. Not sending.", file=sys.stderr)
-        return 2
-    if sending and not recipient and not audience_id:
+    if sending and not recipient and not audience_id and not draft_id:
         print("RESEND_AUDIENCE_ID is not set. Not sending.", file=sys.stderr)
         return 2
 
@@ -253,14 +446,18 @@ def main(argv=None) -> int:
         return 2
     try:
         if recipient:
-            send_test_email(
+            email_id = send_test_email(
                 api_key=api_key,
                 to=recipient,
                 subject=subject,
                 html=render_email(issue, broadcast=False, lesson=lesson),
                 text=render_plain(issue, broadcast=False, lesson=lesson),
             )
-            print(f"Sent a test email to {recipient}. The broadcast was not sent.", file=sys.stderr)
+            print(
+                f"Submitted a test email to {recipient} ({email_id or 'no id'}). "
+                "The broadcast was not sent, and delivery is not verified.",
+                file=sys.stderr,
+            )
             return 0
         broadcast_id = create_broadcast(
             api_key=api_key,
@@ -282,7 +479,11 @@ def main(argv=None) -> int:
         retention_days=int(config.get("state_retention_days") or 21),
     )
     _note_sent()
-    print(f"Sent {issue.date} as broadcast {broadcast_id}.", file=sys.stderr)
+    print(
+        f"Submitted {issue.date} as broadcast {broadcast_id}. "
+        "Delivery is not verified until a later check sees last_event delivered.",
+        file=sys.stderr,
+    )
     return 0
 
 

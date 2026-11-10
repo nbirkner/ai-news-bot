@@ -140,24 +140,68 @@ def issue_already_sent(date: str, state_file: Path = Path("state/sent_issues.jso
     return bool((date or "").strip()) and (date or "").strip() in load_sent_issues(state_file)
 
 
+def _write_sent(issues: dict, state_file: Path) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"issues": issues}, indent=2, sort_keys=True) + "\n")
+
+
 def mark_issue_sent(
     date: str,
     state_file: Path = Path("state/sent_issues.json"),
     *,
-    broadcast_id: str,
+    broadcast_id: str = "",
+    email_id: str = "",
+    last_event: str = "",
+    delivery: str = "unverified",
     when: datetime | None = None,
 ) -> None:
-    """Record one real broadcast. Call this only after Resend accepts the send."""
+    """Record a provider id after Resend accepts a send.
+
+    `delivery` stays `unverified` until a later GET /emails reads last_event.
+    A broadcast status of sent is not inbox delivery.
+    """
     when = when or datetime.now(timezone.utc)
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
+    key = (date or "").strip()
     issues = load_sent_issues(state_file)
-    issues[(date or "").strip()] = {
+    issues[key] = {
         "sent_at": when.astimezone(timezone.utc).isoformat(),
         "broadcast_id": broadcast_id,
+        "email_id": email_id,
+        "last_event": last_event,
+        "delivery": delivery,
     }
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"issues": issues}, indent=2, sort_keys=True) + "\n")
+    _write_sent(issues, state_file)
+
+
+def record_provider_delivery(
+    date: str,
+    state_file: Path = Path("state/sent_issues.json"),
+    *,
+    email_id: str,
+    last_event: str,
+    delivery: str,
+    broadcast_id: str = "",
+    when: datetime | None = None,
+) -> None:
+    """Store a provider email id and its last_event without sending."""
+    when = when or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    key = (date or "").strip()
+    issues = load_sent_issues(state_file)
+    row = dict(issues.get(key) or {})
+    row.setdefault("sent_at", when.astimezone(timezone.utc).isoformat())
+    row["email_id"] = email_id
+    row["last_event"] = last_event
+    row["delivery"] = delivery
+    if broadcast_id:
+        row["broadcast_id"] = broadcast_id
+    else:
+        row.setdefault("broadcast_id", "")
+    issues[key] = row
+    _write_sent(issues, state_file)
 
 
 def recent_items(briefings: list) -> list:

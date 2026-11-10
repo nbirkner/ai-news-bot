@@ -56,13 +56,13 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`, so one of them is 9:00 local in both PST and PDT. On a schedule, the guard continues when the America/Los_Angeles weekday is Monday and the hour is 9 through 12 inclusive. A start an hour or two late still sends. A second run the same Monday does not send again when `state/sent_issues.json` already has that window end.
+Mondays at 9:00 AM America/Los_Angeles. GitHub has started the two old UTC crons five to seven hours late, so the workflow now runs every hour from 16:00 UTC Monday through 07:00 UTC Tuesday, and once more at 08:30 UTC Tuesday. On a schedule, a run sends while the Pacific clock is still Monday and the hour is 9 through 23. A run after that Monday fails when `state/sent_issues.json` does not already list the issue. A second run the same Monday does not send again when that file lists the date, or when Resend already has an email or a submitted broadcast for that subject.
 
 The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
 
 `--send` creates a Resend broadcast to the audience in `RESEND_AUDIENCE_ID`, from `Niki Birkner <ainews@nikibirkner.com>`. The subject is `email_subject()` (`AI News, October 19, 2026` for that issue). The HTML is `render_email(broadcast=True)` and the text is `render_plain(broadcast=True)`. Resend is then told to send that broadcast, using `RESEND_API_KEY`.
 
-The send does not run when the issue has no stories, or when that issue date is already in `state/sent_issues.json`. The seen-article list, the recent briefings, and that sent-date file are written only after Resend accepts the send. The Actions cache is saved only then. A dry run, a test email, an empty issue, and a failed send leave the cache as it was.
+The send does not run when the issue has no stories, when that issue date is already in `state/sent_issues.json`, or when Resend already has an email object or a submitted broadcast for that subject. The seen-article list, the recent briefings, and that sent-date file are written only after Resend accepts the send. The recorded delivery is `unverified` until a later read. `python3 main_newsletter.py --verify-delivery --window-end YYYY-MM-DD` GETs `/emails` and stores the provider email id and `last_event`. `last_event` of `sent` means Resend accepted the message. It does not mean the mailbox delivered it. `delivered`, `opened`, and `clicked` do. The command does not send. The Actions cache is saved only after a real broadcast is accepted. A dry run, a test email, an empty issue, and a failed send leave the cache as it was.
 
 Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE_REPO_TOKEN` are not used by this workflow.
 
@@ -197,10 +197,10 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 | --- | --- |
 | Day | Monday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16 * * 1` and `0 17 * * 1` |
-| Guard | On schedule, continue when America/Los_Angeles is Monday and the hour is 9 through 12 |
+| UTC crons | `0 16-23 * * 1`, `0 0-7 * * 2`, and `30 8 * * 2` |
+| Guard | On schedule, send when America/Los_Angeles is Monday and the hour is 9 through 23. After Monday, fail if that issue was not sent. |
 
-GitHub's scheduler is UTC and does not follow daylight saving. The two crons stay an hour apart so one of them is 9:00 Pacific in both standard time and daylight time. The guard keeps a scheduled run when that clock is Monday and the hour is 9, 10, 11, or 12, which covers a late Actions start through noon. It skips any other weekday or hour. A manual run is not subject to the guard. If both crons land inside the window, the second run sees the issue date in `state/sent_issues.json` and does not broadcast again.
+GitHub's scheduler is UTC and does not follow daylight saving. The hourly crons cover a late start through the end of Monday Pacific. The 08:30 UTC Tuesday run is after Monday in both PST and PDT. It fails the job when the issue is still unsent, instead of exiting 0. A manual run is not subject to the guard. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the provider email and does not broadcast again. Inbox delivery stays a separate `--verify-delivery` read.
 
 The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 

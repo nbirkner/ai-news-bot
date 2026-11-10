@@ -248,6 +248,27 @@ def test_newsletter_uses_sources_file_plus_rss_without_exa(tmp_path, monkeypatch
     assert reflection == "The lab post is the primary source."
 
 
+def test_stale_sources_file_falls_back_to_rss(tmp_path, monkeypatch):
+    rss = _rss()
+    stale = _item(
+        published="2026-09-01T16:00:00Z",
+        title="Old lab note",
+        url="https://www.anthropic.com/news/old-lab-note",
+    )
+    seen = _run_issue(
+        tmp_path,
+        monkeypatch,
+        payload=[stale],
+        fetcher=lambda config, since, now: FetchReport(articles=[rss], failures=[], successes=3),
+        searcher=None,
+    )
+    titles = [article.title for article in seen["articles"]]
+    assert rss.title in titles
+    assert "Old lab note" not in titles
+    assert seen["discovered"].sources_status == "stale"
+    assert seen["discovered"].curated_count == 0
+
+
 def test_missing_sources_file_falls_back_to_rss(tmp_path, monkeypatch):
     rss = _rss()
     seen = _run_issue(

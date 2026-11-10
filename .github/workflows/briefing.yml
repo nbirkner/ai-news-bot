@@ -1,19 +1,21 @@
 name: AI briefing
 
 # Monday newsletter, aimed at 9:00 America/Los_Angeles.
-# Both UTC crons stay. 16:00 UTC is 9:00 PDT and 8:00 PST; 17:00 UTC is
-# 10:00 PDT and 9:00 PST. Dropping either one misses 9:00 for half the year.
-# On schedule, the guard proceeds when the Pacific weekday is Monday and the
-# hour is 09 through 12 inclusive, so a late Actions start still sends
-# through noon. A second cron the same Monday does not broadcast twice:
-# main_newsletter.py exits 0 when state/sent_issues.json already lists that
-# window_end, and the cache is saved only after a real broadcast.
-# Slack posting and the site publish stay off. This workflow does not post
-# and it does not push the MDX anywhere.
+# GitHub started the 16:00 and 17:00 UTC crons 5 to 7.5 hours late on
+# 26 Oct, 2 Nov, and 9 Nov 2026. Those runs then exited 0 without sending.
+# The crons below cover Monday afternoon and evening Pacific, plus one
+# run after Monday ends. While it is still Monday from 09:00 through 23:59
+# local, a run sends. After that Monday, an unsent issue fails the job.
+# A second run does not broadcast twice: sent_issues.json and an existing
+# Resend email or submitted broadcast stop it. Accepting a broadcast is not
+# inbox delivery. Delivery is a separate --verify-delivery check of
+# last_event, and last_event sent is not delivered.
+# Slack posting and the site publish stay off.
 on:
   schedule:
-    - cron: "0 16 * * 1"
-    - cron: "0 17 * * 1"
+    - cron: "0 16-23 * * 1"
+    - cron: "0 0-7 * * 2"
+    - cron: "30 8 * * 2"
   workflow_dispatch:
     inputs:
       window_end:
@@ -28,6 +30,10 @@ on:
         description: "Send one email to this address instead of the broadcast. Ignored when dry_run is checked."
         type: string
         default: ""
+      verify_delivery:
+        description: "Read Resend last_event for this issue. Does not send."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,43 +46,11 @@ jobs:
   newsletter:
     runs-on: ubuntu-latest
     steps:
-      - name: Pacific Monday window
-        id: guard
-        run: |
-          set -euo pipefail
-          hour=$(TZ=America/Los_Angeles date +%H)
-          weekday_num=$(TZ=America/Los_Angeles date +%u)
-          weekday_name=$(TZ=America/Los_Angeles date +%A)
-          # 10# keeps 08 and 09 in decimal. A leading zero is octal in bash.
-          hour_num=$((10#$hour))
-          echo "America/Los_Angeles hour=${hour} weekday=${weekday_name} (${weekday_num})"
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "proceed=true reason=manual ${{ github.event_name }}; Monday 09-12 America/Los_Angeles window applies to schedule only"
-            exit 0
-          fi
-          if [ "$weekday_num" -eq 1 ] && [ "$hour_num" -ge 9 ] && [ "$hour_num" -le 12 ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "proceed=true reason=Monday and hour ${hour} is inside 09-12 America/Los_Angeles"
-          else
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            why="hour ${hour} is outside 09-12 America/Los_Angeles"
-            if [ "$weekday_num" -ne 1 ]; then
-              why="weekday is ${weekday_name}, not Monday"
-              if [ "$hour_num" -lt 9 ] || [ "$hour_num" -gt 12 ]; then
-                why="${why}; hour ${hour} is outside 09-12 America/Los_Angeles"
-              fi
-            fi
-            echo "proceed=false reason=${why}"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.guard.outputs.proceed == 'true'
         with:
           token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
 
       - name: Restore briefing state
-        if: steps.guard.outputs.proceed == 'true'
         uses: actions/cache/restore@v4
         with:
           path: state
@@ -84,18 +58,33 @@ jobs:
           restore-keys: |
             briefing-state-
 
+      - name: Decide whether this run sends
+        id: guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SENT_PATH: state/sent_issues.json
+        run: python3 scripts/schedule_guard.py
+
+      - name: Monday issue was not sent
+        if: steps.guard.outputs.action == 'fail'
+        env:
+          REASON: ${{ steps.guard.outputs.reason }}
+        run: |
+          echo "::error title=Monday AI News was not sent::${REASON}"
+          exit 1
+
       - uses: actions/setup-python@v5
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.action == 'send'
         with:
           python-version: "3.11"
           cache: "pip"
 
       - run: pip install -r requirements.txt
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.action == 'send'
 
       - name: Resolve Monday window
         id: window
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.action == 'send'
         env:
           EVENT_NAME: ${{ github.event_name }}
           WINDOW_END: ${{ inputs.window_end }}
@@ -124,20 +113,24 @@ jobs:
 
       - name: Newsletter
         id: newsletter
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.action == 'send'
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-          # Exa stays off unless a repository variable sets EXA_ENABLED to 1.
           EXA_ENABLED: ${{ vars.EXA_ENABLED || '0' }}
           EXA_MAX_CALLS: ${{ vars.EXA_MAX_CALLS || '6' }}
           TOGETHER_MODEL: ${{ vars.TOGETHER_MODEL || '' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_AUDIENCE_ID: ${{ secrets.RESEND_AUDIENCE_ID }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          VERIFY_DELIVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_delivery && '1' || '0' }}
           TEST_TO: ${{ github.event_name == 'workflow_dispatch' && inputs.test_to || '' }}
         run: |
           set -euo pipefail
+          if [ "${VERIFY_DELIVERY}" = "1" ] || [ "${VERIFY_DELIVERY}" = "true" ]; then
+            python main_newsletter.py --verify-delivery --window-end "${{ steps.window.outputs.end }}"
+            exit 0
+          fi
           args=(main_newsletter.py --window-end "${{ steps.window.outputs.end }}" --window-start "${{ steps.window.outputs.start }}")
           case "${DRY_RUN}" in
             1|true|True|yes|YES) args+=(--dry-run) ;;
@@ -146,7 +139,7 @@ jobs:
           python "${args[@]}"
 
       - uses: actions/upload-artifact@v4
-        if: always() && steps.guard.outputs.proceed == 'true'
+        if: always() && steps.guard.outputs.action == 'send'
         with:
           name: newsletter-out
           path: out/

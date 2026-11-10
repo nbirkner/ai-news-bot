@@ -17,7 +17,7 @@ from src.dedupe import (
 from src.guardrails import is_homepage_url
 from src.rank import is_low_trust
 from src.exa_search import ExaBudget, exa_enabled, resolve_cap, search_queries
-from src.fetch import fetch_all
+from src.fetch import fetch_all, in_window
 from src.rank import shortlist_for_reading
 from src.read import read_articles
 
@@ -104,9 +104,26 @@ def prepare_candidates(
     recent_items = recent_items or []
     curated = list(curated or [])
     result = DiscoveryResult(since=since, source_count=len(config.get("sources") or []))
-    result.curated_count = len(curated)
     result.sources_status = sources_status
     result.sources_error = sources_error
+    fresh_curated = []
+    for article in curated:
+        if in_window(article.published_at, since, now):
+            fresh_curated.append(article)
+            continue
+        print(
+            f"Skip, sources file item is outside the window: {article.title}",
+            file=sys.stderr,
+        )
+    if sources_status == "ok" and curated and not fresh_curated:
+        result.sources_status = "stale"
+        result.sources_error = "no stories inside the window"
+        print(
+            "Sources file had no stories inside the window. RSS only.",
+            file=sys.stderr,
+        )
+    curated = fresh_curated
+    result.curated_count = len(curated)
     cap = resolve_cap(config)
     budget = ExaBudget(cap)
     result.exa_cap = budget.cap

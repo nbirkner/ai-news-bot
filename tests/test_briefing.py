@@ -175,12 +175,14 @@ def test_workflow_sends_monday_at_9am_pacific():
     assert "EXA_API_KEY" in text
     assert "RESEND_API_KEY" in text
     assert "RESEND_AUDIENCE_ID" in text
-    assert 'cron: "0 16 * * 1"' in text
-    assert 'cron: "0 17 * * 1"' in text
+    assert 'cron: "0 16-23 * * 1"' in text
+    assert 'cron: "0 0-7 * * 2"' in text
+    assert 'cron: "30 8 * * 2"' in text
     assert "America/Los_Angeles" in text
-    assert '[ "$weekday_num" -eq 1 ]' in text
-    assert '[ "$hour_num" -ge 9 ]' in text
-    assert '[ "$hour_num" -le 12 ]' in text
+    assert "scripts/schedule_guard.py" in text
+    assert "steps.guard.outputs.action == 'fail'" in text
+    assert "--verify-delivery" in text
+    assert "09-12" not in text
     assert "dry_run:" in text
     assert "default: true" in text
     assert "test_to:" in text
