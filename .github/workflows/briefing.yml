@@ -42,6 +42,10 @@ on:
         description: "Allow a manual send when today is not Monday in America/Los_Angeles. Leave false."
         type: boolean
         default: false
+      clear_pending:
+        description: "Drop the uncertain send block for window_end. Does not send. Use only after checking Resend."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -142,8 +146,13 @@ jobs:
           TEST_TO: ${{ github.event_name == 'workflow_dispatch' && inputs.test_to || '' }}
           EVENT_NAME: ${{ github.event_name }}
           ALLOW_OFF_MONDAY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_off_monday && '1' || '0' }}
+          CLEAR_PENDING: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_pending && '1' || '0' }}
         run: |
           set -euo pipefail
+          if [ "${CLEAR_PENDING}" = "1" ] || [ "${CLEAR_PENDING}" = "true" ]; then
+            python main_newsletter.py --clear-pending --window-end "${{ steps.window.outputs.end }}"
+            exit 0
+          fi
           if [ "${VERIFY_DELIVERY}" = "1" ] || [ "${VERIFY_DELIVERY}" = "true" ]; then
             python main_newsletter.py --verify-delivery --window-end "${{ steps.window.outputs.end }}"
             exit 0
@@ -166,7 +175,7 @@ jobs:
       # an empty issue, and a failed send leave it untouched.
       # always() so a later alert step cannot skip this save.
       - name: Save briefing state
-        if: always() && steps.newsletter.outputs.sent == 'true'
+        if: always() && (steps.newsletter.outputs.sent == 'true' || steps.newsletter.outputs.save_state == 'true')
         uses: actions/cache/save@v4
         with:
           path: state

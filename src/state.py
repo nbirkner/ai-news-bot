@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -142,7 +143,61 @@ def issue_already_sent(date: str, state_file: Path = Path("state/sent_issues.jso
 
 def _write_sent(issues: dict, state_file: Path) -> None:
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"issues": issues}, indent=2, sort_keys=True) + "\n")
+    payload = json.dumps({"issues": issues}, indent=2, sort_keys=True) + "\n"
+    temporary = state_file.with_suffix(state_file.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, state_file)
+
+
+def load_pending(state_file: Path = Path("state/pending_sends.json")) -> dict:
+    if not state_file.exists():
+        return {}
+    try:
+        data = json.loads(state_file.read_text())
+    except json.JSONDecodeError:
+        return {}
+    issues = data.get("issues") if isinstance(data, dict) else None
+    if not isinstance(issues, dict):
+        return {}
+    return {str(date): row for date, row in issues.items() if isinstance(row, dict)}
+
+
+def uncertain_send(date: str, state_file: Path = Path("state/pending_sends.json")) -> dict | None:
+    row = load_pending(state_file).get((date or "").strip())
+    if not row or row.get("status") != "uncertain":
+        return None
+    return row
+
+
+def mark_uncertain_send(
+    date: str,
+    state_file: Path = Path("state/pending_sends.json"),
+    *,
+    phase: str,
+    broadcast_id: str = "",
+    when: datetime | None = None,
+) -> None:
+    """Block later sends. Call this before a broadcast POST whose result may be unknown."""
+    when = when or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    issues = load_pending(state_file)
+    issues[(date or "").strip()] = {
+        "status": "uncertain",
+        "phase": phase,
+        "broadcast_id": broadcast_id,
+        "at": when.astimezone(timezone.utc).isoformat(),
+    }
+    _write_sent(issues, state_file)
+
+
+def clear_uncertain_send(date: str, state_file: Path = Path("state/pending_sends.json")) -> None:
+    issues = load_pending(state_file)
+    issues.pop((date or "").strip(), None)
+    _write_sent(issues, state_file)
 
 
 def mark_issue_sent(

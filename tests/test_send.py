@@ -204,11 +204,13 @@ def test_failed_send_does_not_record_state(tmp_path, monkeypatch):
     code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
     assert code == 2
     assert len([call for call in calls if call["url"].endswith("/broadcasts")]) == 1
-    assert len([call for call in calls if call["url"].endswith("/send")]) == 3
-    send_calls = [call for call in calls if call["url"].endswith("/send")]
-    assert all("Idempotency-Key" not in call["headers"] for call in send_calls)
-    assert all(call["json"] == {} for call in send_calls)
+    assert len([call for call in calls if call["url"].endswith("/send")]) == 1
     assert not (tmp_path / "state" / "sent_issues.json").exists()
+    pending = json.loads((tmp_path / "state" / "pending_sends.json").read_text())
+    assert pending["issues"]["2026-10-19"]["status"] == "uncertain"
+    code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
+    assert code == 2
+    assert len([call for call in calls if call["url"].endswith("/send")]) == 1
     assert not (tmp_path / "state" / "seen_articles.json").exists()
     assert "sent=true" not in output.read_text()
 
@@ -337,32 +339,54 @@ def test_a_provider_list_error_does_not_send(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "sent_issues.json").exists()
 
 
-def test_temporary_send_errors_retry_the_same_broadcast(tmp_path, monkeypatch):
-    calls, _generated, _output = _install(monkeypatch, tmp_path)
-    sends = {"n": 0}
+def test_timeout_after_accept_blocks_a_fresh_runner_when_the_list_lags(tmp_path, monkeypatch):
+    """The send POST can be accepted and then time out, while the list stays empty.
 
-    def post(url, headers, payload):
+    The second runner must not POST again. An empty provider list does not
+    release the block.
+    """
+    import requests
+    posts = []
+
+    def post(url, headers=None, json=None, timeout=None):
+        posts.append(url)
         if url.endswith("/broadcasts"):
-            return Response(201, {"id": "br_retry"})
-        sends["n"] += 1
-        if sends["n"] < 3:
-            return Response(503, {"message": "unavailable"})
-        return Response(200, {"id": "br_retry"})
+            return Response(201, {"id": "br_hidden"})
+        raise requests.Timeout("timed out after the server accepted")
 
-    monkeypatch.setattr("src.resend_send.requests.post", lambda url, headers=None, json=None, timeout=None: (
-        calls.append({"url": url, "headers": headers or {}, "json": json}) or post(url, headers, json)
-    ))
-    _send_env(monkeypatch)
+    def get(url, headers=None, params=None, timeout=None):
+        if str(url).rstrip("/").endswith("/emails"):
+            return Response(200, {"object": "list", "has_more": False, "data": []})
+        if str(url).rstrip("/").endswith("/broadcasts"):
+            return Response(200, {"data": []})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("src.resend_send.requests.post", post)
+    monkeypatch.setattr("src.resend_send.requests.get", get)
+    monkeypatch.setattr("main_newsletter.generate_issue", lambda config, **kwargs: (_issue(), [], Discovered()))
+    monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("RESEND_AUDIENCE_ID", AUDIENCE)
     from main_newsletter import main
-    code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
-    assert code == 0
-    assert sends["n"] == 3
-    send_calls = [call for call in calls if call["url"].endswith("/send")]
-    assert all("Idempotency-Key" not in call["headers"] for call in send_calls)
-    assert [call["json"] for call in send_calls] == [{}, {}, {}]
-    saved = json.loads((tmp_path / "state" / "sent_issues.json").read_text())
-    assert saved["issues"]["2026-10-19"]["broadcast_id"] == "br_retry"
-    assert saved["issues"]["2026-10-19"]["delivery"] == "unverified"
+    assert main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"]) == 2
+    assert posts == [
+        "https://api.resend.com/broadcasts",
+        "https://api.resend.com/broadcasts/br_hidden/send",
+    ]
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "fresh"))
+    # The fresh runner only has the saved pending file, same as a cache restore.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "pending_sends.json").write_text((tmp_path / "state" / "pending_sends.json").read_text())
+    assert main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"]) == 2
+    assert posts == [
+        "https://api.resend.com/broadcasts",
+        "https://api.resend.com/broadcasts/br_hidden/send",
+    ]
+    pending = json.loads((fresh / "pending_sends.json").read_text())
+    assert pending["issues"]["2026-10-19"]["status"] == "uncertain"
+    assert pending["issues"]["2026-10-19"]["phase"] == "send"
 
 
 def _provider_store():

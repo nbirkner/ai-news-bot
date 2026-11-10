@@ -37,6 +37,13 @@ class SendError(Exception):
     """Resend refused the call. The issue was not marked sent."""
 
 
+class AmbiguousSend(SendError):
+    """A broadcast POST timed out or returned 5xx.
+
+    The provider may already have accepted it. Do not send that request again.
+    """
+
+
 # Broadcast status "sent" means Resend accepted the broadcast. It is not
 # inbox delivery. Delivery is last_event on GET /emails, and "sent" there
 # is still not delivered.
@@ -234,6 +241,21 @@ def find_broadcast(*, api_key: str, subject: str, get=None) -> dict | None:
     return None
 
 
+def post_once(post, url: str, *, headers: dict, payload: dict, timeout: int, action: str):
+    """One broadcast POST. Timeout and 5xx are ambiguous and are not retried."""
+    try:
+        response = post(url, headers=headers, json=payload, timeout=timeout)
+    except requests.RequestException as exc:
+        raise AmbiguousSend(
+            f"Resend {action} outcome is unknown ({exc}). Not retrying."
+        ) from exc
+    if response.status_code in (500, 502, 503, 504):
+        raise AmbiguousSend(
+            f"Resend {action} outcome is unknown ({response.status_code}). Not retrying."
+        )
+    return response
+
+
 def post_with_retry(
     post,
     url: str,
@@ -244,10 +266,10 @@ def post_with_retry(
     idempotency_key: str,
     action: str,
 ):
-    """POST up to three times on a timeout or a temporary status.
+    """Retry POST /emails only. The key and the payload stay the same.
 
-    The idempotency key stays the same across attempts so a retry after the
-    provider accepted the first request does not create a second resource.
+    Broadcast endpoints do not use this. Resend documents the key for
+    /emails, and a retry is safe only when the body is unchanged.
     """
     send_headers = dict(headers)
     if idempotency_key:
@@ -284,7 +306,7 @@ def create_broadcast(
     Resend does not document Idempotency-Key on this endpoint, so none is sent.
     """
     post = post or requests.post
-    response = post_with_retry(
+    response = post_once(
         post,
         f"{API}/broadcasts",
         headers=_headers(api_key),
@@ -298,7 +320,6 @@ def create_broadcast(
             "name": subject,
         },
         timeout=60,
-        idempotency_key="",
         action="create broadcast",
     )
     data = _payload(response, "create broadcast")
@@ -315,13 +336,12 @@ def send_broadcast(*, api_key: str, broadcast_id: str, post=None) -> None:
     list check in the caller, not this header.
     """
     post = post or requests.post
-    response = post_with_retry(
+    response = post_once(
         post,
         f"{API}/broadcasts/{broadcast_id}/send",
         headers=_headers(api_key),
         payload={},
         timeout=60,
-        idempotency_key="",
         action="send broadcast",
     )
     _payload(response, "send broadcast")
