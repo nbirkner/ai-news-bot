@@ -177,7 +177,11 @@ def test_workflow_sends_monday_at_9am_pacific():
     assert "RESEND_AUDIENCE_ID" in text
     assert 'cron: "0 16-23 * * 1"' in text
     assert 'cron: "0 0-7 * * 2"' in text
-    assert 'cron: "30 8 * * 2"' in text
+    assert 'cron: "30 8 * * 2,3,4"' in text
+    assert "exit 1" in text
+    assert "::error title=Monday AI News was not sent::" in text
+    assert "cancel-in-progress: false" in text
+    assert "group: ai-briefing" in text
     assert "America/Los_Angeles" in text
     assert "scripts/schedule_guard.py" in text
     assert "steps.guard.outputs.action == 'fail'" in text

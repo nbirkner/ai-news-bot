@@ -56,7 +56,7 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles. GitHub has started the two old UTC crons five to seven hours late, so the workflow now runs every hour from 16:00 UTC Monday through 07:00 UTC Tuesday, and once more at 08:30 UTC Tuesday. On a schedule, a run sends while the Pacific clock is still Monday and the hour is 9 through 23. A run after that Monday fails when `state/sent_issues.json` does not already list the issue. A second run the same Monday does not send again when that file lists the date, or when Resend already has an email or a submitted broadcast for that subject.
+Mondays at 9:00 AM America/Los_Angeles. GitHub has started the two old UTC crons five to seven hours late, so the workflow now runs every hour from 16:00 UTC Monday through 07:00 UTC Tuesday, and at 08:30 UTC on Tuesday, Wednesday, and Thursday. On a schedule, a run sends while the Pacific clock is still Monday and the hour is 9 through 23. A run after that Monday fails the job when `state/sent_issues.json` does not already list the issue. The failure is a GitHub Actions error annotation, which is the alert. It does not send email or Slack, and it reaches someone only if that person gets Actions failure notifications. These crons do not guarantee 9:00 AM. GitHub can delay or drop every run. If none of them starts until the next Monday, the missed week does not fail a job. A second run does not send again when that file lists the date, or when Resend already has an email whose subject is exactly this issue, or a submitted broadcast with that name. A font-test subject is not this issue. A provider list error does not send.
 
 The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
 
@@ -197,10 +197,10 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 | --- | --- |
 | Day | Monday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16-23 * * 1`, `0 0-7 * * 2`, and `30 8 * * 2` |
-| Guard | On schedule, send when America/Los_Angeles is Monday and the hour is 9 through 23. After Monday, fail if that issue was not sent. |
+| UTC crons | `0 16-23 * * 1`, `0 0-7 * * 2`, and `30 8 * * 2,3,4` |
+| Guard | On schedule, send when America/Los_Angeles is Monday and the hour is 9 through 23. After Monday, fail the job if that issue was not sent. |
 
-GitHub's scheduler is UTC and does not follow daylight saving. The hourly crons cover a late start through the end of Monday Pacific. The 08:30 UTC Tuesday run is after Monday in both PST and PDT. It fails the job when the issue is still unsent, instead of exiting 0. A manual run is not subject to the guard. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the provider email and does not broadcast again. Inbox delivery stays a separate `--verify-delivery` read.
+GitHub's scheduler is UTC and does not follow daylight saving. `16:00 UTC` is 9:00 AM during Pacific daylight time and 8:00 AM during standard time. `17:00 UTC` is 9:00 AM standard time. `07:00 UTC` Tuesday is still 11:00 PM Monday in standard time and midnight Tuesday in daylight time. `08:30 UTC` is after Monday in both. The hourly crons do not make GitHub start at 9:00 AM. They give a late start somewhere to land while it is still Monday. The Tue/Wed/Thu 08:30 UTC runs fail the job when the issue is still unsent. That failed job is the alert. If GitHub drops those runs too, nothing notifies anyone. A manual run is not subject to the guard. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the exact provider subject and does not broadcast again. `queued`, `delivery_delayed`, and `sent` are not delivered. Inbox delivery stays a separate `--verify-delivery` read.
 
 The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 

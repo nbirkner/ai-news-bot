@@ -41,6 +41,7 @@ from src.resend_send import (
     find_broadcast,
     find_email,
     get_email,
+    same_issue_subject,
     send_broadcast,
     send_test_email,
 )
@@ -155,12 +156,12 @@ def provider_hold(date: str, api_key: str, state_dir: Path) -> str:
     try:
         email = find_email(api_key=api_key, subject=subject)
     except SendError as exc:
-        if "truncated" in str(exc):
-            print(str(exc), file=sys.stderr)
-            print("Not sending, because a partial provider list cannot prove this issue is new.", file=sys.stderr)
-            return "unsure"
-        print(f"Warning: {exc} Not treating that as an existing send.", file=sys.stderr)
-        email = None
+        print(str(exc), file=sys.stderr)
+        print(
+            "Not sending. The provider email list could not prove this issue is new.",
+            file=sys.stderr,
+        )
+        return "unsure"
     if email is not None:
         record_provider_delivery(
             date,
@@ -187,8 +188,12 @@ def provider_hold(date: str, api_key: str, state_dir: Path) -> str:
     try:
         broadcast = find_broadcast(api_key=api_key, subject=subject)
     except SendError as exc:
-        print(f"Warning: {exc} Not treating that as an existing send.", file=sys.stderr)
-        broadcast = None
+        print(str(exc), file=sys.stderr)
+        print(
+            "Not sending. The provider broadcast list could not prove this issue is new.",
+            file=sys.stderr,
+        )
+        return "unsure"
     if not broadcast:
         return ""
     if broadcast.get("submitted"):
@@ -238,40 +243,79 @@ def verify_delivery(argv) -> int:
         return 2
     state_dir = _state_dir()
     sent_path = state_dir / "sent_issues.json"
-    email_id = ""
-    if sent_path.exists():
-        from src.state import load_sent_issues
-        email_id = str((load_sent_issues(sent_path).get(date) or {}).get("email_id") or "")
+    from src.state import load_sent_issues
+
+    saved = load_sent_issues(sent_path).get(date) or {} if sent_path.exists() else {}
+    email_id = str(saved.get("email_id") or "")
+    broadcast_id = str(saved.get("broadcast_id") or "")
+    found = None
     try:
         if email_id:
-            found = get_email(api_key=api_key, email_id=email_id)
-        else:
+            loaded = get_email(api_key=api_key, email_id=email_id)
+            if same_issue_subject(subject, loaded.get("subject") or ""):
+                found = loaded
+            else:
+                print(
+                    f"Stored email {email_id} subject {loaded.get('subject') or '(none)'!r} "
+                    f"is not {subject!r}. Ignoring it.",
+                    file=sys.stderr,
+                )
+        if found is None:
             found = find_email(api_key=api_key, subject=subject)
     except SendError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if not found:
+    if found:
+        record_provider_delivery(
+            date,
+            sent_path,
+            email_id=found["id"],
+            last_event=found["last_event"],
+            delivery=found["delivery"],
+            broadcast_id=broadcast_id,
+        )
         print(
-            f"No Resend email for {subject}. The {date} issue was not submitted.",
+            f"Resend email {found['id']} subject={subject!r} "
+            f"last_event={found['last_event'] or 'unknown'} delivery={found['delivery']}",
+            file=sys.stderr,
+        )
+        if found["delivered"]:
+            print(f"{subject} is delivered.", file=sys.stderr)
+            return 0
+        if found["last_event"] in {"sent", "queued", "scheduled", "delivery_delayed"}:
+            print(
+                f"last_event {found['last_event']} is not delivered.",
+                file=sys.stderr,
+            )
+        else:
+            print("Not delivered.", file=sys.stderr)
+        return 2
+    try:
+        broadcast = find_broadcast(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if broadcast and (broadcast.get("submitted") or broadcast["id"] == broadcast_id):
+        delivery = "submitted" if broadcast.get("submitted") else "unverified"
+        record_provider_delivery(
+            date,
+            sent_path,
+            email_id="",
+            last_event="",
+            delivery=delivery,
+            broadcast_id=broadcast["id"],
+        )
+        print(
+            f"Resend broadcast {broadcast['id']} status={broadcast.get('status') or 'unknown'} "
+            "is not inbox delivery. No matching email object.",
             file=sys.stderr,
         )
         return 2
-    record_provider_delivery(
-        date,
-        sent_path,
-        email_id=found["id"],
-        last_event=found["last_event"],
-        delivery=found["delivery"],
-    )
     print(
-        f"Resend email {found['id']} last_event={found['last_event'] or 'unknown'} "
-        f"delivery={found['delivery']}",
+        f"No Resend email for {subject}. Broadcast list has no matching submitted issue. "
+        f"The {date} issue was not submitted.",
         file=sys.stderr,
     )
-    if found["delivered"]:
-        print(f"{subject} is delivered.", file=sys.stderr)
-        return 0
-    print("last_event sent is not delivered." if found["last_event"] == "sent" else "Not delivered.", file=sys.stderr)
     return 2
 
 
@@ -367,7 +411,11 @@ def main(argv=None) -> int:
             return 0
         if draft_id:
             try:
-                send_broadcast(api_key=api_key, broadcast_id=draft_id)
+                send_broadcast(
+                    api_key=api_key,
+                    broadcast_id=draft_id,
+                    idempotency_key=f"ai-news-{issue_date}-send",
+                )
             except SendError as exc:
                 print(str(exc), file=sys.stderr)
                 print("Not recording the issue as sent.", file=sys.stderr)
@@ -465,10 +513,22 @@ def main(argv=None) -> int:
             subject=subject,
             html=render_email(issue, broadcast=True, lesson=lesson),
             text=render_plain(issue, broadcast=True, lesson=lesson),
+            idempotency_key=f"ai-news-{issue.date}",
         )
-        send_broadcast(api_key=api_key, broadcast_id=broadcast_id)
+        send_broadcast(
+            api_key=api_key,
+            broadcast_id=broadcast_id,
+            idempotency_key=f"ai-news-{issue.date}-send",
+        )
     except SendError as exc:
         print(str(exc), file=sys.stderr)
+        hold = provider_hold(issue.date, api_key, state_dir)
+        if hold == "skip":
+            print(
+                "The provider already has this issue. Not creating another send.",
+                file=sys.stderr,
+            )
+            return 0
         print("Not recording the issue as sent.", file=sys.stderr)
         return 2
 

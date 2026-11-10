@@ -5,6 +5,10 @@ GitHub has started the 16:00 and 17:00 UTC crons five to seven hours late
 America/Los_Angeles, from 09:00 through 23:59, sends. A run after that Monday
 fails when the issue was not sent, so the workflow is not a green skip.
 A second run the same Monday does not send again.
+
+The crons do not guarantee a 9:00 start. If GitHub delays every run until the
+next Monday, this function sees that later Monday and does not fail the
+missed week. The missed week then has no failed job.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

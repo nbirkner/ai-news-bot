@@ -57,6 +57,31 @@ def test_after_monday_with_a_send_does_not_fail_or_send_again():
     assert "Already sent 2026-11-09" in decision.reason
 
 
+def test_daylight_and_standard_time_boundaries():
+    # Second Monday of March 2026 is after the spring-forward on March 8.
+    assert _at("2026-03-09T16:00:00Z").action == "send"  # 09:00 PDT
+    assert _at("2026-03-10T06:00:00Z").action == "send"  # 23:00 PDT Monday
+    assert _at("2026-03-10T07:00:00Z").action == "fail"  # 00:00 PDT Tuesday
+    # November 2026 is standard time. 16:00 UTC is 08:00, before the send.
+    assert _at("2026-11-02T16:00:00Z").action == "skip"
+    assert _at("2026-11-02T17:00:00Z").action == "send"  # 09:00 PST
+    assert _at("2026-11-03T07:00:00Z").action == "send"  # 23:00 PST Monday
+    assert _at("2026-11-03T08:30:00Z").action == "fail"  # 00:30 PST Tuesday
+    # Midsummer Monday, daylight time.
+    assert _at("2026-07-13T16:00:00Z").action == "send"  # 09:00 PDT
+    assert _at("2026-07-14T07:00:00Z").action == "fail"  # 00:00 PDT Tuesday
+
+
+def test_a_run_delayed_until_the_next_monday_does_not_fail_the_missed_week():
+    """GitHub can delay a cron until the following Monday.
+
+    That clock is a new issue date, not an alert for the week that was missed.
+    """
+    decision = _at("2026-11-16T17:00:00Z")
+    assert decision.action == "send"
+    assert decision.issue_date == "2026-11-16"
+
+
 def test_a_manual_run_is_not_bound_by_the_monday_window():
     decision = _at("2026-11-10T18:00:00Z", scheduled=False)
     assert decision.action == "send"

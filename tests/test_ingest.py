@@ -206,7 +206,7 @@ def test_monday_send_workflow_catches_a_late_start():
     text = Path(".github/workflows/briefing.yml").read_text(encoding="utf-8")
     assert 'cron: "0 16-23 * * 1"' in text
     assert 'cron: "0 0-7 * * 2"' in text
-    assert 'cron: "30 8 * * 2"' in text
+    assert 'cron: "30 8 * * 2,3,4"' in text
     assert "09-12" not in text
     assert "--send" in text
     assert "--verify-delivery" in text

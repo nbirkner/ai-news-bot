@@ -3,9 +3,13 @@ name: AI briefing
 # Monday newsletter, aimed at 9:00 America/Los_Angeles.
 # GitHub started the 16:00 and 17:00 UTC crons 5 to 7.5 hours late on
 # 26 Oct, 2 Nov, and 9 Nov 2026. Those runs then exited 0 without sending.
-# The crons below cover Monday afternoon and evening Pacific, plus one
-# run after Monday ends. While it is still Monday from 09:00 through 23:59
-# local, a run sends. After that Monday, an unsent issue fails the job.
+# The crons below cover Monday afternoon and evening Pacific, plus a
+# check on Tuesday, Wednesday, and Thursday. While it is still Monday from
+# 09:00 through 23:59 local, a run sends. After that Monday, an unsent issue
+# fails the job. That failed job is the alert (a GitHub Actions failure
+# annotation). It does not send mail. GitHub can still delay or drop every
+# cron. This schedule does not guarantee 9:00 AM. If no run starts until the
+# next Monday, the missed week produces no failed job.
 # A second run does not broadcast twice: sent_issues.json and an existing
 # Resend email or submitted broadcast stop it. Accepting a broadcast is not
 # inbox delivery. Delivery is a separate --verify-delivery check of
@@ -15,7 +19,7 @@ on:
   schedule:
     - cron: "0 16-23 * * 1"
     - cron: "0 0-7 * * 2"
-    - cron: "30 8 * * 2"
+    - cron: "30 8 * * 2,3,4"
   workflow_dispatch:
     inputs:
       window_end:
@@ -71,6 +75,13 @@ jobs:
           REASON: ${{ steps.guard.outputs.reason }}
         run: |
           echo "::error title=Monday AI News was not sent::${REASON}"
+          {
+            echo "## Monday AI News was not sent"
+            echo
+            echo "${REASON}"
+            echo
+            echo "This failed job is the alert. It does not send email or Slack."
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
       - uses: actions/setup-python@v5

@@ -1,7 +1,13 @@
 """Resend delivery for one newsletter issue. No Slack and no site commit.
 
 AI News broadcasts to ``RESEND_AUDIENCE_ID`` from ``FROM``.
+The live account's history is individual emails, not broadcasts. A missing
+broadcast list is not proof that an issue was never submitted. Exact subject
+match on GET /emails is the submission check. ``last_event`` of sent, queued,
+scheduled, or delivery_delayed is not inbox delivery.
 """
+
+import time
 
 import requests
 
@@ -19,6 +25,7 @@ class SendError(Exception):
 _SUBMITTED_BROADCAST = {"sent", "queued", "sending"}
 _DELIVERED_EVENTS = {"delivered", "opened", "clicked"}
 _SUBMITTED_EVENTS = {"sent", "queued", "scheduled", "delivery_delayed"}
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 def _headers(api_key: str) -> dict:
@@ -37,6 +44,17 @@ def _payload(response, action: str) -> dict:
     except ValueError:
         data = {}
     return data if isinstance(data, dict) else {}
+
+
+def same_issue_subject(wanted: str, candidate: str) -> bool:
+    """True only when the subjects are the same issue line.
+
+    A font test or a prefixed test send is a different subject. Substring
+    and prefix matches are not this issue.
+    """
+    left = (wanted or "").strip()
+    right = (candidate or "").strip()
+    return bool(left) and left == right
 
 
 def classify_last_event(last_event: str) -> str:
@@ -122,7 +140,7 @@ def find_email(*, api_key: str, subject: str, get=None) -> dict | None:
         return None
     rows, complete = list_emails(api_key=api_key, get=get)
     for row in rows:
-        if str(row.get("subject") or "").strip() != wanted:
+        if not same_issue_subject(wanted, str(row.get("subject") or "")):
             continue
         found = classify_email(row)
         if found["id"]:
@@ -182,8 +200,8 @@ def find_broadcast(*, api_key: str, subject: str, get=None) -> dict | None:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        label = str(row.get("name") or row.get("subject") or "").strip()
-        if label != wanted:
+        label = str(row.get("name") or row.get("subject") or "")
+        if not same_issue_subject(wanted, label):
             continue
         broadcast_id = str(row.get("id") or "").strip()
         if not broadcast_id:
@@ -198,6 +216,42 @@ def find_broadcast(*, api_key: str, subject: str, get=None) -> dict | None:
     return None
 
 
+def post_with_retry(
+    post,
+    url: str,
+    *,
+    headers: dict,
+    payload: dict,
+    timeout: int,
+    idempotency_key: str,
+    action: str,
+):
+    """POST up to three times on a timeout or a temporary status.
+
+    The idempotency key stays the same across attempts so a retry after the
+    provider accepted the first request does not create a second resource.
+    """
+    send_headers = dict(headers)
+    if idempotency_key:
+        send_headers["Idempotency-Key"] = idempotency_key
+    response = None
+    for attempt in range(3):
+        try:
+            response = post(url, headers=send_headers, json=payload, timeout=timeout)
+        except requests.RequestException as exc:
+            if attempt == 2:
+                raise SendError(f"Resend {action} failed ({exc})") from exc
+            time.sleep(0)
+            continue
+        if response.status_code in _RETRYABLE_STATUS:
+            if attempt == 2:
+                raise SendError(f"Resend {action} failed ({response.status_code})")
+            time.sleep(0)
+            continue
+        return response
+    raise SendError(f"Resend {action} failed")
+
+
 def create_broadcast(
     *,
     api_key: str,
@@ -206,13 +260,15 @@ def create_broadcast(
     html: str,
     text: str,
     post=None,
+    idempotency_key: str = "",
 ) -> str:
     """Create a draft broadcast. Audiences moved to segments; the id is the same value."""
     post = post or requests.post
-    response = post(
+    response = post_with_retry(
+        post,
         f"{API}/broadcasts",
         headers=_headers(api_key),
-        json={
+        payload={
             "audience_id": audience_id,
             "segment_id": audience_id,
             "from": FROM,
@@ -222,6 +278,8 @@ def create_broadcast(
             "name": subject,
         },
         timeout=60,
+        idempotency_key=idempotency_key,
+        action="create broadcast",
     )
     data = _payload(response, "create broadcast")
     broadcast_id = str(data.get("id") or "").strip()
@@ -230,13 +288,16 @@ def create_broadcast(
     return broadcast_id
 
 
-def send_broadcast(*, api_key: str, broadcast_id: str, post=None) -> None:
+def send_broadcast(*, api_key: str, broadcast_id: str, post=None, idempotency_key: str = "") -> None:
     post = post or requests.post
-    response = post(
+    response = post_with_retry(
+        post,
         f"{API}/broadcasts/{broadcast_id}/send",
         headers=_headers(api_key),
-        json={},
+        payload={},
         timeout=60,
+        idempotency_key=idempotency_key,
+        action="send broadcast",
     )
     _payload(response, "send broadcast")
 
