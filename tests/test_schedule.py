@@ -4,9 +4,15 @@ from datetime import datetime, timezone
 from src.schedule import decide
 
 
-def _at(stamp: str, *, scheduled: bool = True, sent: bool = False):
+def _at(stamp: str, *, scheduled: bool = True, sent: bool = False, send_from: str = "issue", sent_dates=None):
+    from datetime import date
+    from src.schedule import parse_send_from, target_issue_date
     when = datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone(timezone.utc)
-    return decide(when, scheduled=scheduled, sent=sent)
+    if send_from == "issue":
+        armed = date.fromisoformat(target_issue_date(when))
+    else:
+        armed = parse_send_from(send_from)
+    return decide(when, scheduled=scheduled, sent=sent, send_from=armed, sent_dates=sent_dates)
 
 
 def test_nov9_late_runs_still_send():
@@ -75,11 +81,44 @@ def test_daylight_and_standard_time_boundaries():
 def test_a_run_delayed_until_the_next_monday_does_not_fail_the_missed_week():
     """GitHub can delay a cron until the following Monday.
 
-    That clock is a new issue date, not an alert for the week that was missed.
+    With send_from set to that new Monday, the missed prior week is before
+    activation and is not an alarm. The clock is the new issue.
     """
-    decision = _at("2026-11-16T17:00:00Z")
+    decision = _at("2026-11-16T17:00:00Z", send_from="2026-11-16")
     assert decision.action == "send"
     assert decision.issue_date == "2026-11-16"
+    assert decision.missed == ()
+
+
+def test_the_following_monday_reports_an_unsent_armed_week_and_not_older_ones():
+    later = _at("2026-11-23T17:00:00Z", send_from="2026-11-16", sent_dates=set())
+    assert later.action == "send"
+    assert later.issue_date == "2026-11-23"
+    assert later.missed == ("2026-11-16",)
+    assert "2026-11-09" not in later.missed
+    assert "2026-10-26" not in later.missed
+
+
+def test_empty_send_from_does_not_send_or_alarm_on_monday_evening():
+    # 2026-11-10 03:00 UTC is 19:00 Monday Nov 9 Pacific. A merge at that
+    # hour must not send and must not alarm about weeks already missed.
+    decision = _at("2026-11-10T03:00:00Z", send_from="")
+    assert decision.action == "skip"
+    assert decision.missed == ()
+    assert "not activated" in decision.reason
+
+
+def test_a_weekend_manual_send_is_refused_without_the_override():
+    from src.schedule import manual_send_allowed
+    when = datetime.fromisoformat("2026-11-14T18:00:00+00:00")
+    allowed, reason = manual_send_allowed(when, "2026-11-09", allow_off_monday=False)
+    assert allowed is False
+    assert "Saturday" in reason
+    allowed, reason = manual_send_allowed(when, "2026-11-09", allow_off_monday=True)
+    assert allowed is True
+    bad, reason = manual_send_allowed(when, "2026-11-11", allow_off_monday=True)
+    assert bad is False
+    assert "not a Monday" in reason
 
 
 def test_a_manual_run_is_not_bound_by_the_monday_window():
@@ -89,6 +128,7 @@ def test_a_manual_run_is_not_bound_by_the_monday_window():
 
 def test_guard_script_writes_the_nov9_decision(tmp_path, monkeypatch):
     monkeypatch.setenv("EVENT_NAME", "schedule")
+    monkeypatch.setenv("SCHEDULE_SEND_FROM", "2026-11-09")
     monkeypatch.setenv("SCHEDULE_NOW", "2026-11-09T23:58:09Z")
     monkeypatch.setenv("SENT_PATH", str(tmp_path / "missing.json"))
     output = tmp_path / "output.txt"

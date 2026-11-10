@@ -5,6 +5,24 @@ The live account's history is individual emails, not broadcasts. A missing
 broadcast list is not proof that an issue was never submitted. Exact subject
 match on GET /emails is the submission check. ``last_event`` of sent, queued,
 scheduled, or delivery_delayed is not inbox delivery.
+
+Idempotency, from https://resend.com/docs/dashboard/emails/idempotency-keys
+as fetched for this change:
+
+- ``Idempotency-Key`` is documented for POST /emails, POST /emails/batch,
+  and the inbox send, reply, and forward calls. It is not documented for
+  POST /broadcasts or POST /broadcasts/{id}/send. This module does not send
+  the header on those broadcast calls. A retry of create or send broadcast
+  can create or send another broadcast if the list check does not see the
+  first one yet.
+- On POST /emails, the same key and the same payload within 24 hours returns
+  the original response and does not send again. The key expires after 24
+  hours, so the same key the next day is a new send.
+- The same key with a different payload returns 409 ``invalid_idempotent_request``.
+  The new body is not sent. This module does not mint a new key to push that
+  body through.
+- 409 ``concurrent_idempotent_requests`` means the first request is still in
+  progress. It is not retried as a second send.
 """
 
 import time
@@ -260,9 +278,11 @@ def create_broadcast(
     html: str,
     text: str,
     post=None,
-    idempotency_key: str = "",
 ) -> str:
-    """Create a draft broadcast. Audiences moved to segments; the id is the same value."""
+    """Create a draft broadcast. Audiences moved to segments; the id is the same value.
+
+    Resend does not document Idempotency-Key on this endpoint, so none is sent.
+    """
     post = post or requests.post
     response = post_with_retry(
         post,
@@ -278,7 +298,7 @@ def create_broadcast(
             "name": subject,
         },
         timeout=60,
-        idempotency_key=idempotency_key,
+        idempotency_key="",
         action="create broadcast",
     )
     data = _payload(response, "create broadcast")
@@ -288,7 +308,12 @@ def create_broadcast(
     return broadcast_id
 
 
-def send_broadcast(*, api_key: str, broadcast_id: str, post=None, idempotency_key: str = "") -> None:
+def send_broadcast(*, api_key: str, broadcast_id: str, post=None) -> None:
+    """Send one API-created broadcast.
+
+    Resend does not document Idempotency-Key here. Duplicate protection is the
+    list check in the caller, not this header.
+    """
     post = post or requests.post
     response = post_with_retry(
         post,
@@ -296,7 +321,7 @@ def send_broadcast(*, api_key: str, broadcast_id: str, post=None, idempotency_ke
         headers=_headers(api_key),
         payload={},
         timeout=60,
-        idempotency_key=idempotency_key,
+        idempotency_key="",
         action="send broadcast",
     )
     _payload(response, "send broadcast")
@@ -310,13 +335,19 @@ def send_test_email(
     html: str,
     text: str,
     post=None,
+    idempotency_key: str = "",
 ) -> str:
-    """One message via /emails. This is not a broadcast and does not mark the issue sent."""
+    """One message via /emails. This is not a broadcast and does not mark the issue sent.
+
+    ``idempotency_key`` is the POST /emails contract. Retries send this same
+    payload. A different payload under this key is a 409 and is not sent.
+    """
     post = post or requests.post
-    response = post(
+    response = post_with_retry(
+        post,
         f"{API}/emails",
         headers=_headers(api_key),
-        json={
+        payload={
             "from": FROM,
             "to": [to],
             "subject": subject,
@@ -324,6 +355,8 @@ def send_test_email(
             "text": text,
         },
         timeout=60,
+        idempotency_key=idempotency_key,
+        action="send email",
     )
     data = _payload(response, "send email")
     return str(data.get("id") or "").strip()

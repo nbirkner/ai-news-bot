@@ -31,6 +31,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from src.schedule import manual_send_allowed
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
@@ -136,6 +137,16 @@ def record_successful_send(
     save_seen(prune_old(seen, retention_days=retention_days), seen_path)
     save_last_run(issue.until or now, state_dir / "last_briefing.json")
     remember_issue(issue, state_dir / "recent_briefings.json", when=now)
+
+
+def _dispatch_now():
+    from datetime import datetime, timezone
+    from src.schedule import as_utc
+
+    raw = (os.environ.get("SCHEDULE_NOW") or "").strip()
+    if not raw:
+        return datetime.now(timezone.utc)
+    return as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
 
 
 def _subject_for(date: str) -> str:
@@ -399,6 +410,15 @@ def main(argv=None) -> int:
     state_dir = _state_dir()
     sent_path = state_dir / "sent_issues.json"
     issue_date = until.strftime("%Y-%m-%d")
+    if sending and not recipient and (os.environ.get("EVENT_NAME") or "") == "workflow_dispatch":
+        allowed, why = manual_send_allowed(
+            _dispatch_now(),
+            issue_date,
+            allow_off_monday=_truthy(os.environ.get("ALLOW_OFF_MONDAY", "")),
+        )
+        if not allowed:
+            print(why, file=sys.stderr)
+            return 2
     draft_id = ""
     if sending and not recipient and issue_already_sent(issue_date, sent_path):
         print(f"Already sent {issue_date}. Not sending again.", file=sys.stderr)
@@ -411,11 +431,7 @@ def main(argv=None) -> int:
             return 0
         if draft_id:
             try:
-                send_broadcast(
-                    api_key=api_key,
-                    broadcast_id=draft_id,
-                    idempotency_key=f"ai-news-{issue_date}-send",
-                )
+                send_broadcast(api_key=api_key, broadcast_id=draft_id)
             except SendError as exc:
                 print(str(exc), file=sys.stderr)
                 print("Not recording the issue as sent.", file=sys.stderr)
@@ -500,6 +516,7 @@ def main(argv=None) -> int:
                 subject=subject,
                 html=render_email(issue, broadcast=False, lesson=lesson),
                 text=render_plain(issue, broadcast=False, lesson=lesson),
+                idempotency_key=f"ai-news-test/{issue.date}/{recipient}",
             )
             print(
                 f"Submitted a test email to {recipient} ({email_id or 'no id'}). "
@@ -513,13 +530,8 @@ def main(argv=None) -> int:
             subject=subject,
             html=render_email(issue, broadcast=True, lesson=lesson),
             text=render_plain(issue, broadcast=True, lesson=lesson),
-            idempotency_key=f"ai-news-{issue.date}",
         )
-        send_broadcast(
-            api_key=api_key,
-            broadcast_id=broadcast_id,
-            idempotency_key=f"ai-news-{issue.date}-send",
-        )
+        send_broadcast(api_key=api_key, broadcast_id=broadcast_id)
     except SendError as exc:
         print(str(exc), file=sys.stderr)
         hold = provider_hold(issue.date, api_key, state_dir)

@@ -3,13 +3,13 @@ name: AI briefing
 # Monday newsletter, aimed at 9:00 America/Los_Angeles.
 # GitHub started the 16:00 and 17:00 UTC crons 5 to 7.5 hours late on
 # 26 Oct, 2 Nov, and 9 Nov 2026. Those runs then exited 0 without sending.
-# The crons below cover Monday afternoon and evening Pacific, plus a
-# check on Tuesday, Wednesday, and Thursday. While it is still Monday from
-# 09:00 through 23:59 local, a run sends. After that Monday, an unsent issue
-# fails the job. That failed job is the alert (a GitHub Actions failure
-# annotation). It does not send mail. GitHub can still delay or drop every
-# cron. This schedule does not guarantee 9:00 AM. If no run starts until the
-# next Monday, the missed week produces no failed job.
+# schedule.yaml send_from is empty, so these crons do not send and do not
+# alarm. That includes a merge on Monday evening: later Tuesday-UTC hours
+# are still Monday night Pacific, and they skip. Set send_from to the first
+# Monday that should go out. GitHub cron is only the backup. It does not
+# guarantee 9:00 AM and can drop every run. The primary send is a manual or
+# external workflow_dispatch, dry_run false, on a Monday, with window_end
+# set to that Monday. dry_run stays true unless someone unchecks it.
 # A second run does not broadcast twice: sent_issues.json and an existing
 # Resend email or submitted broadcast stop it. Accepting a broadcast is not
 # inbox delivery. Delivery is a separate --verify-delivery check of
@@ -36,6 +36,10 @@ on:
         default: ""
       verify_delivery:
         description: "Read Resend last_event for this issue. Does not send."
+        type: boolean
+        default: false
+      allow_off_monday:
+        description: "Allow a manual send when today is not Monday in America/Los_Angeles. Leave false."
         type: boolean
         default: false
 
@@ -70,7 +74,7 @@ jobs:
         run: python3 scripts/schedule_guard.py
 
       - name: Monday issue was not sent
-        if: steps.guard.outputs.action == 'fail'
+        if: steps.guard.outputs.action == 'fail' || (steps.guard.outputs.missed != '' && steps.guard.outputs.action != 'send')
         env:
           REASON: ${{ steps.guard.outputs.reason }}
         run: |
@@ -136,6 +140,8 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
           VERIFY_DELIVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_delivery && '1' || '0' }}
           TEST_TO: ${{ github.event_name == 'workflow_dispatch' && inputs.test_to || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          ALLOW_OFF_MONDAY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_off_monday && '1' || '0' }}
         run: |
           set -euo pipefail
           if [ "${VERIFY_DELIVERY}" = "1" ] || [ "${VERIFY_DELIVERY}" = "true" ]; then
@@ -158,9 +164,27 @@ jobs:
 
       # Only a real broadcast updates the cache. A dry run, a test email,
       # an empty issue, and a failed send leave it untouched.
+      # always() so a later alert step cannot skip this save.
       - name: Save briefing state
-        if: steps.newsletter.outputs.sent == 'true'
+        if: always() && steps.newsletter.outputs.sent == 'true'
         uses: actions/cache/save@v4
         with:
           path: state
           key: briefing-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # A current-week send can still leave an earlier armed Monday unsent.
+      # Fail after the cache save so that week is recorded and the miss stays visible.
+      - name: Earlier Monday was not sent
+        if: always() && steps.guard.outputs.action == 'send' && steps.guard.outputs.missed != ''
+        env:
+          MISSED: ${{ steps.guard.outputs.missed }}
+        run: |
+          echo "::error title=Earlier Monday AI News was not sent::${MISSED}"
+          {
+            echo "## Earlier Monday AI News was not sent"
+            echo
+            echo "${MISSED}"
+            echo
+            echo "This failed job is the alert. It does not send another email."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

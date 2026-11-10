@@ -16,8 +16,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.schedule import as_utc, decide, target_issue_date
-from src.state import issue_already_sent
+from src.schedule import as_utc, decide, load_send_from, parse_send_from, target_issue_date
+from src.state import issue_already_sent, load_sent_issues
 
 
 def current_time() -> datetime:
@@ -27,18 +27,27 @@ def current_time() -> datetime:
     return as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
 
 
-def already_sent(issue_date: str) -> bool:
+def sent_dates() -> set[str]:
     path = Path((os.environ.get("SENT_PATH") or "state/sent_issues.json").strip())
-    return issue_already_sent(issue_date, path)
+    return set(load_sent_issues(path))
 
 
-def write_output(action: str, reason: str, issue_date: str) -> None:
+def send_from_date():
+    override = os.environ.get("SCHEDULE_SEND_FROM")
+    if override is not None:
+        return parse_send_from(override)
+    path = Path((os.environ.get("SCHEDULE_FILE") or "schedule.yaml").strip())
+    return load_send_from(path)
+
+
+def write_output(action: str, reason: str, issue_date: str, missed: tuple) -> None:
     path = (os.environ.get("GITHUB_OUTPUT") or "").strip()
     if not path:
         return
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(f"action={action}\n")
         handle.write(f"issue_date={issue_date}\n")
+        handle.write(f"missed={','.join(missed)}\n")
         handle.write(f"reason={reason}\n")
 
 
@@ -54,8 +63,15 @@ def main() -> int:
     event = (os.environ.get("EVENT_NAME") or "").strip()
     when = current_time()
     issue_date = target_issue_date(when)
-    decision = decide(when, scheduled=event == "schedule", sent=already_sent(issue_date))
-    write_output(decision.action, decision.reason, decision.issue_date)
+    recorded = sent_dates()
+    decision = decide(
+        when,
+        scheduled=event == "schedule",
+        sent=issue_already_sent(issue_date, Path((os.environ.get("SENT_PATH") or "state/sent_issues.json").strip())),
+        send_from=send_from_date(),
+        sent_dates=recorded,
+    )
+    write_output(decision.action, decision.reason, decision.issue_date, decision.missed)
     summarize(decision.action, decision.reason)
     if decision.action == "skip":
         print(f"::notice::{decision.reason}")

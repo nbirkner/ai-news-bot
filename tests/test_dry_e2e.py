@@ -177,6 +177,10 @@ def test_workflow_yaml_parses_and_a_miss_fails_the_job():
     data = yaml.safe_load(text)
     assert data["concurrency"]["group"] == "ai-briefing"
     assert data["concurrency"]["cancel-in-progress"] is False
+    assert "send_from: \"\"" in Path("schedule.yaml").read_text()
+    dispatch = data[True]["workflow_dispatch"]["inputs"]
+    assert dispatch["dry_run"]["default"] is True
+    assert dispatch["allow_off_monday"]["default"] is False
     crons = [item["cron"] for item in data[True]["schedule"]]
     assert "0 16-23 * * 1" in crons
     assert "0 0-7 * * 2" in crons

@@ -127,7 +127,7 @@ def test_broadcast_uses_the_issue_subject_then_sends_once(tmp_path, monkeypatch,
     assert len(calls) == 2
     created, sent = calls
     assert created["url"] == "https://api.resend.com/broadcasts"
-    assert created["headers"]["Idempotency-Key"] == "ai-news-2026-10-19"
+    assert "Idempotency-Key" not in created["headers"]
     assert created["headers"]["Authorization"] == "Bearer re_test"
     body = created["json"]
     assert body["from"] == "Niki Birkner <ainews@nikibirkner.com>"
@@ -140,7 +140,7 @@ def test_broadcast_uses_the_issue_subject_then_sends_once(tmp_path, monkeypatch,
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in body["text"]
     assert "AI News, October 19, 2026" in body["text"]
     assert sent["url"] == "https://api.resend.com/broadcasts/br_123/send"
-    assert sent["headers"]["Idempotency-Key"] == "ai-news-2026-10-19-send"
+    assert "Idempotency-Key" not in sent["headers"]
     assert sent["json"] == {}
     saved = json.loads((tmp_path / "state" / "sent_issues.json").read_text())
     assert saved["issues"]["2026-10-19"]["broadcast_id"] == "br_123"
@@ -205,7 +205,9 @@ def test_failed_send_does_not_record_state(tmp_path, monkeypatch):
     assert code == 2
     assert len([call for call in calls if call["url"].endswith("/broadcasts")]) == 1
     assert len([call for call in calls if call["url"].endswith("/send")]) == 3
-    assert len({call["headers"]["Idempotency-Key"] for call in calls if call["url"].endswith("/send")}) == 1
+    send_calls = [call for call in calls if call["url"].endswith("/send")]
+    assert all("Idempotency-Key" not in call["headers"] for call in send_calls)
+    assert all(call["json"] == {} for call in send_calls)
     assert not (tmp_path / "state" / "sent_issues.json").exists()
     assert not (tmp_path / "state" / "seen_articles.json").exists()
     assert "sent=true" not in output.read_text()
@@ -221,6 +223,7 @@ def test_test_to_sends_one_email_and_skips_the_broadcast(tmp_path, monkeypatch):
     assert len(calls) == 1
     call = calls[0]
     assert call["url"] == "https://api.resend.com/emails"
+    assert call["headers"]["Idempotency-Key"] == "ai-news-test/2026-10-19/niki@example.com"
     assert call["json"]["from"] == "Niki Birkner <ainews@nikibirkner.com>"
     assert call["json"]["to"] == ["niki@example.com"]
     assert call["json"]["subject"] == "AI News, October 19, 2026"
@@ -354,8 +357,9 @@ def test_temporary_send_errors_retry_the_same_broadcast(tmp_path, monkeypatch):
     code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
     assert code == 0
     assert sends["n"] == 3
-    keys = [call["headers"]["Idempotency-Key"] for call in calls if call["url"].endswith("/send")]
-    assert keys == ["ai-news-2026-10-19-send"] * 3
+    send_calls = [call for call in calls if call["url"].endswith("/send")]
+    assert all("Idempotency-Key" not in call["headers"] for call in send_calls)
+    assert [call["json"] for call in send_calls] == [{}, {}, {}]
     saved = json.loads((tmp_path / "state" / "sent_issues.json").read_text())
     assert saved["issues"]["2026-10-19"]["broadcast_id"] == "br_retry"
     assert saved["issues"]["2026-10-19"]["delivery"] == "unverified"
@@ -519,6 +523,41 @@ def test_verify_a_submitted_broadcast_is_not_delivered_when_no_email_exists(tmp_
     assert row["broadcast_id"] == "br_only"
     assert row["delivery"] == "submitted"
     assert row["last_event"] == ""
+
+
+def test_a_changed_email_body_under_the_same_key_is_not_retried(tmp_path, monkeypatch):
+    calls = []
+
+    def post(url, headers=None, json=None, timeout=None):
+        calls.append({"headers": headers or {}, "json": json})
+        return Response(409, {"name": "invalid_idempotent_request"})
+
+    monkeypatch.setattr("src.resend_send.requests.post", post)
+    from src.resend_send import SendError, send_test_email
+    with pytest.raises(SendError):
+        send_test_email(
+            api_key="re_test",
+            to="niki@example.com",
+            subject="AI News, October 19, 2026",
+            html="<p>one</p>",
+            text="one",
+            idempotency_key="ai-news-test/2026-10-19/niki@example.com",
+        )
+    assert len(calls) == 1
+    assert calls[0]["headers"]["Idempotency-Key"] == "ai-news-test/2026-10-19/niki@example.com"
+    assert calls[0]["json"]["html"] == "<p>one</p>"
+
+
+def test_workflow_dispatch_on_saturday_does_not_send(tmp_path, monkeypatch):
+    calls, generated, _output = _install(monkeypatch, tmp_path)
+    _send_env(monkeypatch)
+    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("SCHEDULE_NOW", "2026-11-14T18:00:00Z")
+    from main_newsletter import main
+    code = main(["main_newsletter.py", "--send", "--window-end", "2026-11-09"])
+    assert code == 2
+    assert calls == []
+    assert generated == []
 
 
 def test_readme_names_the_resend_secrets():
