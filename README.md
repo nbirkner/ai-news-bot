@@ -56,7 +56,7 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`, so one of them is 9:00 local in both PST and PDT. On a schedule, the guard continues when the America/Los_Angeles weekday is Monday and the hour is 9 through 12 inclusive. A start an hour or two late still sends. A second run the same Monday does not send again when `state/sent_issues.json` already has that window end.
+Mondays at 9:00 AM America/Los_Angeles. The workflow runs `17 16 * * 1` and `17 17 * * 1`, so one of them is 9:17 local in both PST and PDT, plus `17 20 * * 1` as a same-day backup. On a schedule, the guard sends from Monday 09:00 through Tuesday 12:59 America/Los_Angeles. A start outside that window fails the job. A second run does not send again when `state/sent_issues.json` already has that window end.
 
 The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
 
@@ -197,10 +197,10 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 | --- | --- |
 | Day | Monday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16 * * 1` and `0 17 * * 1` |
-| Guard | On schedule, continue when America/Los_Angeles is Monday and the hour is 9 through 12 |
+| UTC crons | `17 16 * * 1`, `17 17 * * 1`, and `17 20 * * 1` |
+| Guard | On schedule, send from Monday 09:00 through Tuesday 12:59 America/Los_Angeles. A later start fails the job. |
 
-GitHub's scheduler is UTC and does not follow daylight saving. The two crons stay an hour apart so one of them is 9:00 Pacific in both standard time and daylight time. The guard keeps a scheduled run when that clock is Monday and the hour is 9, 10, 11, or 12, which covers a late Actions start through noon. It skips any other weekday or hour. A manual run is not subject to the guard. If both crons land inside the window, the second run sees the issue date in `state/sent_issues.json` and does not broadcast again.
+GitHub's scheduler is UTC and does not follow daylight saving. The two morning crons stay an hour apart so one of them is 9:17 Pacific in both standard time and daylight time. Minute 17 keeps them off the top of the hour. `17 20 * * 1` is the backup when a morning run is dropped. The guard in `src/schedule_guard.py` still sends when Actions starts late the same Monday, and through Tuesday 12:59 Pacific if a Monday cron crosses midnight. The scheduled window end stays that Monday. A Monday start before 09:00 exits 0 and waits for the 09:00 cron. A start after Tuesday 12:59 exits 1. A manual run is not subject to the guard. If more than one cron lands inside the window, the later run sees the issue date in `state/sent_issues.json` and does not broadcast again.
 
 The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 

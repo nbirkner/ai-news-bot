@@ -1,19 +1,25 @@
 name: AI briefing
 
 # Monday newsletter, aimed at 9:00 America/Los_Angeles.
-# Both UTC crons stay. 16:00 UTC is 9:00 PDT and 8:00 PST; 17:00 UTC is
-# 10:00 PDT and 9:00 PST. Dropping either one misses 9:00 for half the year.
-# On schedule, the guard proceeds when the Pacific weekday is Monday and the
-# hour is 09 through 12 inclusive, so a late Actions start still sends
-# through noon. A second cron the same Monday does not broadcast twice:
-# main_newsletter.py exits 0 when state/sent_issues.json already lists that
-# window_end, and the cache is saved only after a real broadcast.
+# The two morning UTC crons stay an hour apart, at minute 17 so they are
+# not queued at the top of the hour. 16:17 UTC is 9:17 PDT and 8:17 PST.
+# 17:17 UTC is 10:17 PDT and 9:17 PST. Dropping either one misses 9:00 for
+# half the year. 20:17 UTC is the same-day backup (13:17 PDT, 12:17 PST)
+# when the morning runs are dropped.
+# src/schedule_guard.py sends on a schedule from Monday 09:00 through
+# Tuesday 12:59 America/Los_Angeles. The scheduled runs in October and
+# November 2026 started four to eight hours late, past the old noon cutoff,
+# and the job still exited 0. A start outside that recovery window now
+# fails the job. A second cron does not broadcast twice: main_newsletter.py
+# exits 0 when state/sent_issues.json already lists that window_end, and
+# the cache is saved only after a real broadcast.
 # Slack posting and the site publish stay off. This workflow does not post
 # and it does not push the MDX anywhere.
 on:
   schedule:
-    - cron: "0 16 * * 1"
-    - cron: "0 17 * * 1"
+    - cron: "17 16 * * 1"
+    - cron: "17 17 * * 1"
+    - cron: "17 20 * * 1"
   workflow_dispatch:
     inputs:
       window_end:
@@ -40,40 +46,15 @@ jobs:
   newsletter:
     runs-on: ubuntu-latest
     steps:
-      - name: Pacific Monday window
-        id: guard
-        run: |
-          set -euo pipefail
-          hour=$(TZ=America/Los_Angeles date +%H)
-          weekday_num=$(TZ=America/Los_Angeles date +%u)
-          weekday_name=$(TZ=America/Los_Angeles date +%A)
-          # 10# keeps 08 and 09 in decimal. A leading zero is octal in bash.
-          hour_num=$((10#$hour))
-          echo "America/Los_Angeles hour=${hour} weekday=${weekday_name} (${weekday_num})"
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "proceed=true reason=manual ${{ github.event_name }}; Monday 09-12 America/Los_Angeles window applies to schedule only"
-            exit 0
-          fi
-          if [ "$weekday_num" -eq 1 ] && [ "$hour_num" -ge 9 ] && [ "$hour_num" -le 12 ]; then
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "proceed=true reason=Monday and hour ${hour} is inside 09-12 America/Los_Angeles"
-          else
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            why="hour ${hour} is outside 09-12 America/Los_Angeles"
-            if [ "$weekday_num" -ne 1 ]; then
-              why="weekday is ${weekday_name}, not Monday"
-              if [ "$hour_num" -lt 9 ] || [ "$hour_num" -gt 12 ]; then
-                why="${why}; hour ${hour} is outside 09-12 America/Los_Angeles"
-              fi
-            fi
-            echo "proceed=false reason=${why}"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.guard.outputs.proceed == 'true'
         with:
           token: ${{ secrets.GH_PAT != '' && secrets.GH_PAT || github.token }}
+
+      - name: Pacific Monday window
+        id: guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 src/schedule_guard.py
 
       - name: Restore briefing state
         if: steps.guard.outputs.proceed == 'true'
@@ -99,10 +80,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           WINDOW_END: ${{ inputs.window_end }}
+          GUARD_END: ${{ steps.guard.outputs.window_end }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "schedule" ]; then
-            end=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+            end="$GUARD_END"
           elif [ -n "$WINDOW_END" ]; then
             end="$WINDOW_END"
           else
@@ -151,6 +133,13 @@ jobs:
           name: newsletter-out
           path: out/
           if-no-files-found: ignore
+
+      - name: Record the send result
+        if: always() && steps.guard.outputs.proceed == 'true'
+        run: |
+          echo "sources_status=${{ steps.newsletter.outputs.sources_status }}"
+          echo "sent=${{ steps.newsletter.outputs.sent }}"
+          echo "result=${{ steps.newsletter.outputs.result }}"
 
       # Only a real broadcast updates the cache. A dry run, a test email,
       # an empty issue, and a failed send leave it untouched.

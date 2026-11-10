@@ -79,12 +79,17 @@ def _state_dir() -> Path:
     return Path(os.environ.get("STATE_DIR") or "state")
 
 
-def _note_sent() -> None:
+def _note(key: str, value: str) -> None:
     path = (os.environ.get("GITHUB_OUTPUT") or "").strip()
     if not path:
         return
+    text = str(value or "").replace("\n", " ").strip()
     with open(path, "a", encoding="utf-8") as handle:
-        handle.write("sent=true\n")
+        handle.write(f"{key}={text}\n")
+
+
+def _note_sent() -> None:
+    _note("sent", "true")
 
 
 def _valid_email(address: str) -> bool:
@@ -190,6 +195,7 @@ def main(argv=None) -> int:
     sent_path = state_dir / "sent_issues.json"
     if sending and not recipient and issue_already_sent(until.strftime("%Y-%m-%d"), sent_path):
         print(f"Already sent {until.strftime('%Y-%m-%d')}. Not sending again.", file=sys.stderr)
+        _note("result", "already-sent")
         return 0
     if sending and recipient and not _valid_email(recipient):
         print("--test-to needs one email address.", file=sys.stderr)
@@ -216,6 +222,7 @@ def main(argv=None) -> int:
         seen_path=state_dir / "seen_articles.json",
         recent_path=state_dir / "recent_briefings.json",
     )
+    _note("sources_status", getattr(discovered, "sources_status", "") or "unknown")
     usage = format_usage(
         model=config.get("together_model") or "",
         exa_search_calls=getattr(discovered, "exa_search_calls", 0),
@@ -245,6 +252,7 @@ def main(argv=None) -> int:
         return 0
     if issue_already_sent(issue.date, sent_path):
         print(f"Already sent {issue.date}. Not sending again.", file=sys.stderr)
+        _note("result", "already-sent")
         return 0
 
     subject = email_subject(issue)

@@ -44,6 +44,7 @@ def _issue():
 class Discovered:
     exa_search_calls = 0
     exa_content_pages = 0
+    sources_status = "missing"
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +104,9 @@ def test_dry_run_does_not_call_resend_or_save_state(tmp_path, monkeypatch, capsy
     assert code == 0
     assert calls == []
     assert not (tmp_path / "state" / "sent_issues.json").exists()
-    assert output.read_text() == ""
+    recorded = output.read_text()
+    assert "sent=true" not in recorded
+    assert "sources_status=missing" in recorded
     assert "Dry run: not sending the test email." in capsys.readouterr().err
     html = (tmp_path / "out" / "2026-10-19.html").read_text()
     assert "{{{RESEND_UNSUBSCRIBE_URL}}}" in html
@@ -144,12 +147,14 @@ def test_broadcast_uses_the_issue_subject_then_sends_once(tmp_path, monkeypatch,
     err = capsys.readouterr().err
     assert "re_test" not in err
 
-    again, generated_again, _output_again = _install(monkeypatch, tmp_path)
+    again, generated_again, output_again = _install(monkeypatch, tmp_path)
     _send_env(monkeypatch)
     code = main(["main_newsletter.py", "--send", "--window-end", "2026-10-19"])
     assert code == 0
     assert again == []
     assert generated_again == []
+    assert "result=already-sent" in output_again.read_text()
+    assert "sent=true" not in output_again.read_text()
 
 
 def test_guardrail_failure_is_not_sent(tmp_path, monkeypatch):

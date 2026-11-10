@@ -202,11 +202,13 @@ def test_there_is_no_tuesday_lessons_email():
     assert 'cron: "0 17 * * 2"' not in monday
 
 
-def test_monday_send_workflow_is_unchanged():
+def test_monday_send_still_uses_the_news_audience_only():
     text = Path(".github/workflows/briefing.yml").read_text(encoding="utf-8")
-    assert 'cron: "0 16 * * 1"' in text
-    assert 'cron: "0 17 * * 1"' in text
-    assert "09-12" in text
+    assert 'cron: "17 16 * * 1"' in text
+    assert 'cron: "17 17 * * 1"' in text
+    assert 'cron: "17 20 * * 1"' in text
+    assert "src/schedule_guard.py" in text
+    assert "09-12" not in text
     assert "--send" in text
     assert "--test-to" not in text
     assert "test_to:" in text
