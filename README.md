@@ -56,13 +56,21 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles. The workflow runs two UTC crons, `0 16 * * 1` and `0 17 * * 1`, so one of them is 9:00 local in both PST and PDT. On a schedule, the guard continues when the America/Los_Angeles weekday is Monday and the hour is 9 through 12 inclusive. A start an hour or two late still sends. A second run the same Monday does not send again when `state/sent_issues.json` already has that window end.
+Mondays at 9:00 AM America/Los_Angeles is the goal. Nothing in this repo currently starts a send at that time. The existing Monday 9:00 routine counts subscribers. It does not send AI News. The Grok source-gather routine has already failed for lack of usage, so pointing that routine at this workflow would not be a reliable 9:00 clock either. A real 9:00 send needs a new trigger that the owner approves. One option on the existing Vercel account is a cron on the `site` project. That needs its own branch, config, and deploy approval. This PR does not add that project, that cron, or any other service.
+
+GitHub's cron is a late catch-up only, and it is disarmed. It does not promise 9:00 AM. It has started hours late and can drop a week entirely. `schedule.yaml` `send_from` is empty, so scheduled runs do not send and do not alarm. A merge on Monday evening does not mail anyone. Set `send_from` to the first Monday that should go out, and only then. A past date would alarm for every Monday since then. After it is set, a later Monday reports any armed Monday that was never sent, and it does not report weeks before `send_from`. The alarm is a failed Actions job, not an email or a Slack message.
+
+`workflow_dispatch` is how a new approved trigger, or a person, can run one issue. `dry_run` defaults to true. `window_end` is the Monday of that issue. `allow_off_monday` defaults to false, so a weekend dispatch does not send. This PR does not create the trigger.
+
+The backup crons run every hour from 16:00 UTC Monday through 07:00 UTC Tuesday, and at 08:30 UTC Tuesday through Thursday. A second run does not send again when `state/sent_issues.json` lists the date, when `state/pending_sends.json` marks that date uncertain, or when Resend already shows an email with that exact subject or a submitted broadcast with that name. A font-test subject is not this issue. A provider list error does not send. An empty list does not clear an uncertain block.
+
+`Idempotency-Key` is a Resend guarantee only for `POST /emails` (and batch and inbox sends), for 24 hours, and only when the payload is unchanged. The same key with a different body is a 409 and does not send the new body. Test emails use that key. Create broadcast and send broadcast do not document it, so those calls are not retried. A timeout or a 5xx leaves `pending_sends.json` uncertain and later runs refuse another broadcast POST until the date is reconciled. `--clear-pending` only removes that block. It does not send. If the runner is destroyed before that file is saved to the Actions cache, a later run cannot see the block. That gap needs a store outside the job. This repo does not add one.
 
 The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
 
 `--send` creates a Resend broadcast to the audience in `RESEND_AUDIENCE_ID`, from `Niki Birkner <ainews@nikibirkner.com>`. The subject is `email_subject()` (`AI News, October 19, 2026` for that issue). The HTML is `render_email(broadcast=True)` and the text is `render_plain(broadcast=True)`. Resend is then told to send that broadcast, using `RESEND_API_KEY`.
 
-The send does not run when the issue has no stories, or when that issue date is already in `state/sent_issues.json`. The seen-article list, the recent briefings, and that sent-date file are written only after Resend accepts the send. The Actions cache is saved only then. A dry run, a test email, an empty issue, and a failed send leave the cache as it was.
+The send does not run when the issue has no stories, when that issue date is already in `state/sent_issues.json`, when that date is uncertain in `state/pending_sends.json`, or when Resend already has an email object or a submitted broadcast for that subject. The seen-article list, the recent briefings, and that sent-date file are written only after Resend returns success for the send. The recorded delivery is `unverified` until a later read. `python3 main_newsletter.py --verify-delivery --window-end YYYY-MM-DD` GETs `/emails` and stores the provider email id and `last_event`. `last_event` of `sent` means Resend accepted the message. It does not mean the mailbox delivered it. `delivered`, `opened`, and `clicked` do. The command does not send. The Actions cache is saved after a successful broadcast and after an uncertain block is written. A dry run and a test email do not mark the issue sent.
 
 Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE_REPO_TOKEN` are not used by this workflow.
 
@@ -197,10 +205,10 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 | --- | --- |
 | Day | Monday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16 * * 1` and `0 17 * * 1` |
-| Guard | On schedule, continue when America/Los_Angeles is Monday and the hour is 9 through 12 |
+| UTC crons | `0 16-23 * * 1`, `0 0-7 * * 2`, and `30 8 * * 2,3,4` |
+| Guard | On schedule, send when America/Los_Angeles is Monday and the hour is 9 through 23. After Monday, fail the job if that issue was not sent. |
 
-GitHub's scheduler is UTC and does not follow daylight saving. The two crons stay an hour apart so one of them is 9:00 Pacific in both standard time and daylight time. The guard keeps a scheduled run when that clock is Monday and the hour is 9, 10, 11, or 12, which covers a late Actions start through noon. It skips any other weekday or hour. A manual run is not subject to the guard. If both crons land inside the window, the second run sees the issue date in `state/sent_issues.json` and does not broadcast again.
+GitHub's scheduler is UTC and does not follow daylight saving. `16:00 UTC` is 9:00 AM during Pacific daylight time and 8:00 AM during standard time. `17:00 UTC` is 9:00 AM standard time. `07:00 UTC` Tuesday is still 11:00 PM Monday in standard time and midnight Tuesday in daylight time. `08:30 UTC` is after Monday in both. The hourly crons do not make GitHub start at 9:00 AM. They give a late start somewhere to land while it is still Monday. The Tue/Wed/Thu 08:30 UTC runs fail the job when the issue is still unsent. That failed job is the alert. If GitHub drops those runs too, nothing notifies anyone. A manual run is not subject to the guard. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the exact provider subject and does not broadcast again. `queued`, `delivery_delayed`, and `sent` are not delivered. Inbox delivery stays a separate `--verify-delivery` read.
 
 The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
 

@@ -27,20 +27,36 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
+from src.schedule import manual_send_allowed
 from src.dedupe import canonical_url
 from src.issue_run import generate_issue, parse_window_end, previous_mwf_slot
 from src.lesson_file import LessonBlocked, lesson_for_date, pacific_today, render_lesson_mdx, week_lesson
 from src.newsletter import email_subject, render_email, render_mdx, render_plain
-from src.resend_send import SendError, create_broadcast, send_broadcast, send_test_email
+from src.resend_send import (
+    AmbiguousSend,
+    SendError,
+    create_broadcast,
+    find_broadcast,
+    find_email,
+    get_email,
+    same_issue_subject,
+    send_broadcast,
+    send_test_email,
+)
 from src.state import (
+    clear_uncertain_send,
     issue_already_sent,
     load_seen,
     mark_issue_sent,
+    mark_uncertain_send,
+    uncertain_send,
     mark_seen,
     prune_old,
+    record_provider_delivery,
     remember_issue,
     save_last_run,
     save_seen,
@@ -79,12 +95,26 @@ def _state_dir() -> Path:
     return Path(os.environ.get("STATE_DIR") or "state")
 
 
-def _note_sent() -> None:
+def _note_output(line: str) -> None:
     path = (os.environ.get("GITHUB_OUTPUT") or "").strip()
     if not path:
         return
     with open(path, "a", encoding="utf-8") as handle:
-        handle.write("sent=true\n")
+        handle.write(line + "\n")
+        handle.flush()
+
+
+def _note_sent() -> None:
+    _note_output("sent=true")
+    _note_output("save_state=true")
+
+
+def _note_save_state() -> None:
+    _note_output("save_state=true")
+
+
+def _pending_path(state_dir: Path) -> Path:
+    return state_dir / "pending_sends.json"
 
 
 def _valid_email(address: str) -> bool:
@@ -92,13 +122,29 @@ def _valid_email(address: str) -> bool:
     return "@" in text and " " not in text and not text.startswith("@") and not text.endswith("@")
 
 
-def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retention_days: int) -> None:
-    """Persist the issue date and the article memory. Only after Resend accepts the send."""
+def record_successful_send(
+    issue,
+    state_dir: Path,
+    *,
+    broadcast_id: str,
+    retention_days: int,
+    email_id: str = "",
+    last_event: str = "",
+    delivery: str = "unverified",
+) -> None:
+    """Persist the issue date and the article memory.
+
+    Call this only after Resend accepts the send. Acceptance stores the
+    broadcast id with delivery `unverified`. Inbox delivery is a later GET.
+    """
     now = datetime.now(timezone.utc)
     mark_issue_sent(
         issue.date,
         state_dir / "sent_issues.json",
         broadcast_id=broadcast_id,
+        email_id=email_id,
+        last_event=last_event,
+        delivery=delivery,
         when=now,
     )
     seen_path = state_dir / "seen_articles.json"
@@ -109,6 +155,273 @@ def record_successful_send(issue, state_dir: Path, *, broadcast_id: str, retenti
     save_seen(prune_old(seen, retention_days=retention_days), seen_path)
     save_last_run(issue.until or now, state_dir / "last_briefing.json")
     remember_issue(issue, state_dir / "recent_briefings.json", when=now)
+
+
+def _dispatch_now():
+    from datetime import datetime, timezone
+    from src.schedule import as_utc
+
+    raw = (os.environ.get("SCHEDULE_NOW") or "").strip()
+    if not raw:
+        return datetime.now(timezone.utc)
+    return as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+
+
+def _subject_for(date: str) -> str:
+    return email_subject(SimpleNamespace(date=date))
+
+
+def _release_if_provider_has_issue(date: str, api_key: str, state_dir: Path) -> bool:
+    """Clear an uncertain block only when the list already shows this issue.
+
+    An empty or failed list does not release the block and does not send.
+    """
+    subject = _subject_for(date)
+    email = None
+    broadcast = None
+    try:
+        email = find_email(api_key=api_key, subject=subject)
+    except SendError:
+        email = None
+    if email is None:
+        try:
+            broadcast = find_broadcast(api_key=api_key, subject=subject)
+        except SendError:
+            broadcast = None
+    submitted = bool(broadcast and broadcast.get("submitted"))
+    if email is None and not submitted:
+        return False
+    record_provider_delivery(
+        date,
+        state_dir / "sent_issues.json",
+        email_id=(email or {}).get("id") or "",
+        last_event=(email or {}).get("last_event") or "",
+        delivery=(email or {}).get("delivery") or "submitted",
+        broadcast_id=(broadcast or {}).get("id") or "",
+    )
+    clear_uncertain_send(date, _pending_path(state_dir))
+    _note_sent()
+    print(
+        f"Resend already has {subject}. The uncertain block was cleared. Not sending again.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _stop_if_uncertain(date: str, api_key: str, state_dir: Path) -> int | None:
+    row = uncertain_send(date, _pending_path(state_dir))
+    if not row:
+        return None
+    if api_key and _release_if_provider_has_issue(date, api_key, state_dir):
+        return 0
+    print(
+        f"Broadcast send for {date} is uncertain (phase {row.get('phase') or 'unknown'}). "
+        "Not creating or sending another broadcast. "
+        "Check Resend for this exact subject and for a submitted broadcast. "
+        f"If neither exists, run --clear-pending --window-end {date}. That does not send.",
+        file=sys.stderr,
+    )
+    _note_save_state()
+    return 2
+
+
+def clear_pending(argv) -> int:
+    """Drop one uncertain block. This does not send."""
+    if "--send" in argv or "--post" in argv or "--publish" in argv:
+        print("--clear-pending does not send.", file=sys.stderr)
+        return 2
+    raw_end = _flag(argv, "--window-end")
+    if not raw_end:
+        print("Usage: python main_newsletter.py --clear-pending --window-end YYYY-MM-DD", file=sys.stderr)
+        return 2
+    try:
+        until = parse_window_end(raw_end)
+    except ValueError as exc:
+        print(f"Could not parse --window-end: {exc}", file=sys.stderr)
+        return 2
+    date = until.strftime("%Y-%m-%d")
+    path = _pending_path(_state_dir())
+    clear_uncertain_send(date, path)
+    _note_save_state()
+    print(f"Cleared the uncertain block for {date}. Nothing was sent.", file=sys.stderr)
+    return 0
+
+
+def provider_hold(date: str, api_key: str, state_dir: Path) -> str:
+    """Return `skip`, a draft broadcast id, or ``""`` when a new broadcast is allowed.
+
+    An email object, or a broadcast already submitted, means do not send again.
+    last_event `sent` is stored as submitted, not delivered. A draft id is
+    returned so the caller can send that draft instead of creating a second one.
+    A missing email on a complete list means this issue was never submitted.
+    """
+    subject = _subject_for(date)
+    if not subject:
+        return ""
+    try:
+        email = find_email(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        print(
+            "Not sending. The provider email list could not prove this issue is new.",
+            file=sys.stderr,
+        )
+        return "unsure"
+    if email is not None:
+        record_provider_delivery(
+            date,
+            state_dir / "sent_issues.json",
+            email_id=email["id"],
+            last_event=email["last_event"],
+            delivery=email["delivery"],
+        )
+        _note_sent()
+        if email["delivered"]:
+            print(
+                f"Resend email {email['id']} for {subject} is delivered "
+                f"(last_event={email['last_event']}). Not sending again.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Resend email {email['id']} for {subject} exists "
+                f"(last_event={email['last_event'] or 'unknown'}). "
+                "That is not a new send. sent is not delivered.",
+                file=sys.stderr,
+            )
+        return "skip"
+    try:
+        broadcast = find_broadcast(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        print(
+            "Not sending. The provider broadcast list could not prove this issue is new.",
+            file=sys.stderr,
+        )
+        return "unsure"
+    if not broadcast:
+        return ""
+    if broadcast.get("submitted"):
+        record_provider_delivery(
+            date,
+            state_dir / "sent_issues.json",
+            email_id="",
+            last_event="",
+            delivery="submitted",
+            broadcast_id=broadcast["id"],
+        )
+        _note_sent()
+        print(
+            f"Resend broadcast {broadcast['id']} for {subject} was already submitted. "
+            "Delivery is not verified. Not sending again.",
+            file=sys.stderr,
+        )
+        return "skip"
+    if broadcast.get("draft"):
+        print(
+            f"Resend broadcast {broadcast['id']} for {subject} is a draft. Sending that draft.",
+            file=sys.stderr,
+        )
+        return broadcast["id"]
+    return ""
+
+
+def verify_delivery(argv) -> int:
+    """GET the provider email and record last_event. This does not send."""
+    if "--send" in argv or "--post" in argv or "--publish" in argv:
+        print("--verify-delivery does not send.", file=sys.stderr)
+        return 2
+    raw_end = _flag(argv, "--window-end")
+    if not raw_end:
+        print("Usage: python main_newsletter.py --verify-delivery --window-end YYYY-MM-DD", file=sys.stderr)
+        return 2
+    try:
+        until = parse_window_end(raw_end)
+    except ValueError as exc:
+        print(f"Could not parse --window-end: {exc}", file=sys.stderr)
+        return 2
+    date = until.strftime("%Y-%m-%d")
+    subject = _subject_for(date)
+    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    if not api_key:
+        print("RESEND_API_KEY is not set. Not checking delivery.", file=sys.stderr)
+        return 2
+    state_dir = _state_dir()
+    sent_path = state_dir / "sent_issues.json"
+    from src.state import load_sent_issues
+
+    saved = load_sent_issues(sent_path).get(date) or {} if sent_path.exists() else {}
+    email_id = str(saved.get("email_id") or "")
+    broadcast_id = str(saved.get("broadcast_id") or "")
+    found = None
+    try:
+        if email_id:
+            loaded = get_email(api_key=api_key, email_id=email_id)
+            if same_issue_subject(subject, loaded.get("subject") or ""):
+                found = loaded
+            else:
+                print(
+                    f"Stored email {email_id} subject {loaded.get('subject') or '(none)'!r} "
+                    f"is not {subject!r}. Ignoring it.",
+                    file=sys.stderr,
+                )
+        if found is None:
+            found = find_email(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if found:
+        record_provider_delivery(
+            date,
+            sent_path,
+            email_id=found["id"],
+            last_event=found["last_event"],
+            delivery=found["delivery"],
+            broadcast_id=broadcast_id,
+        )
+        print(
+            f"Resend email {found['id']} subject={subject!r} "
+            f"last_event={found['last_event'] or 'unknown'} delivery={found['delivery']}",
+            file=sys.stderr,
+        )
+        if found["delivered"]:
+            print(f"{subject} is delivered.", file=sys.stderr)
+            return 0
+        if found["last_event"] in {"sent", "queued", "scheduled", "delivery_delayed"}:
+            print(
+                f"last_event {found['last_event']} is not delivered.",
+                file=sys.stderr,
+            )
+        else:
+            print("Not delivered.", file=sys.stderr)
+        return 2
+    try:
+        broadcast = find_broadcast(api_key=api_key, subject=subject)
+    except SendError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if broadcast and (broadcast.get("submitted") or broadcast["id"] == broadcast_id):
+        delivery = "submitted" if broadcast.get("submitted") else "unverified"
+        record_provider_delivery(
+            date,
+            sent_path,
+            email_id="",
+            last_event="",
+            delivery=delivery,
+            broadcast_id=broadcast["id"],
+        )
+        print(
+            f"Resend broadcast {broadcast['id']} status={broadcast.get('status') or 'unknown'} "
+            "is not inbox delivery. No matching email object.",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        f"No Resend email for {subject}. Broadcast list has no matching submitted issue. "
+        f"The {date} issue was not submitted.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def run_lesson(argv) -> int:
@@ -145,6 +458,10 @@ def run_lesson(argv) -> int:
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     mode = (_flag(argv, "--mode") or "news").strip().lower()
+    if "--verify-delivery" in argv:
+        return verify_delivery(argv)
+    if "--clear-pending" in argv:
+        return clear_pending(argv)
     if mode == "lesson":
         return run_lesson(argv)
     if mode != "news":
@@ -188,16 +505,66 @@ def main(argv=None) -> int:
     audience_id = (os.environ.get("RESEND_AUDIENCE_ID") or "").strip()
     state_dir = _state_dir()
     sent_path = state_dir / "sent_issues.json"
-    if sending and not recipient and issue_already_sent(until.strftime("%Y-%m-%d"), sent_path):
-        print(f"Already sent {until.strftime('%Y-%m-%d')}. Not sending again.", file=sys.stderr)
+    issue_date = until.strftime("%Y-%m-%d")
+    if sending and not recipient and (os.environ.get("EVENT_NAME") or "") == "workflow_dispatch":
+        allowed, why = manual_send_allowed(
+            _dispatch_now(),
+            issue_date,
+            allow_off_monday=_truthy(os.environ.get("ALLOW_OFF_MONDAY", "")),
+        )
+        if not allowed:
+            print(why, file=sys.stderr)
+            return 2
+    draft_id = ""
+    if sending and not recipient:
+        blocked = _stop_if_uncertain(issue_date, api_key, state_dir)
+        if blocked is not None:
+            return blocked
+    if sending and not recipient and issue_already_sent(issue_date, sent_path):
+        print(f"Already sent {issue_date}. Not sending again.", file=sys.stderr)
         return 0
+    if sending and not recipient and api_key:
+        draft_id = provider_hold(issue_date, api_key, state_dir)
+        if draft_id == "unsure":
+            return 2
+        if draft_id == "skip":
+            return 0
+        if draft_id:
+            mark_uncertain_send(issue_date, _pending_path(state_dir), phase="send", broadcast_id=draft_id)
+            _note_save_state()
+            try:
+                send_broadcast(api_key=api_key, broadcast_id=draft_id)
+            except AmbiguousSend as exc:
+                print(str(exc), file=sys.stderr)
+                print(
+                    f"Left {issue_date} uncertain. Not retrying the broadcast send.",
+                    file=sys.stderr,
+                )
+                return 2
+            except SendError as exc:
+                print(str(exc), file=sys.stderr)
+                print("Not recording the issue as sent. The uncertain block stays.", file=sys.stderr)
+                return 2
+            clear_uncertain_send(issue_date, _pending_path(state_dir))
+            mark_issue_sent(
+                issue_date,
+                sent_path,
+                broadcast_id=draft_id,
+                delivery="unverified",
+            )
+            _note_sent()
+            print(
+                f"Submitted existing draft {draft_id} for {issue_date}. Delivery is not verified.",
+                file=sys.stderr,
+            )
+            return 0
+    if sending and not recipient and not api_key:
+        print("RESEND_API_KEY is not set. Not sending.", file=sys.stderr)
+        return 2
     if sending and recipient and not _valid_email(recipient):
         print("--test-to needs one email address.", file=sys.stderr)
         return 2
-    if sending and not api_key:
-        print("RESEND_API_KEY is not set. Not sending.", file=sys.stderr)
-        return 2
-    if sending and not recipient and not audience_id:
+    if sending and not recipient and not audience_id and not draft_id:
         print("RESEND_AUDIENCE_ID is not set. Not sending.", file=sys.stderr)
         return 2
 
@@ -251,17 +618,25 @@ def main(argv=None) -> int:
     if not subject:
         print("The issue has no subject. Not sending.", file=sys.stderr)
         return 2
+    if recipient:
+        email_id = send_test_email(
+            api_key=api_key,
+            to=recipient,
+            subject=subject,
+            html=render_email(issue, broadcast=False, lesson=lesson),
+            text=render_plain(issue, broadcast=False, lesson=lesson),
+            idempotency_key=f"ai-news-test/{issue.date}/{recipient}",
+        )
+        print(
+            f"Submitted a test email to {recipient} ({email_id or 'no id'}). "
+            "The broadcast was not sent, and delivery is not verified.",
+            file=sys.stderr,
+        )
+        return 0
+    pending = _pending_path(state_dir)
+    mark_uncertain_send(issue.date, pending, phase="create")
+    _note_save_state()
     try:
-        if recipient:
-            send_test_email(
-                api_key=api_key,
-                to=recipient,
-                subject=subject,
-                html=render_email(issue, broadcast=False, lesson=lesson),
-                text=render_plain(issue, broadcast=False, lesson=lesson),
-            )
-            print(f"Sent a test email to {recipient}. The broadcast was not sent.", file=sys.stderr)
-            return 0
         broadcast_id = create_broadcast(
             api_key=api_key,
             audience_id=audience_id,
@@ -269,11 +644,29 @@ def main(argv=None) -> int:
             html=render_email(issue, broadcast=True, lesson=lesson),
             text=render_plain(issue, broadcast=True, lesson=lesson),
         )
+    except AmbiguousSend as exc:
+        print(str(exc), file=sys.stderr)
+        print(f"Left {issue.date} uncertain. Not retrying broadcast create.", file=sys.stderr)
+        return 2
+    except SendError as exc:
+        clear_uncertain_send(issue.date, pending)
+        _note_save_state()
+        print(str(exc), file=sys.stderr)
+        print("Broadcast create was rejected. The uncertain block was cleared.", file=sys.stderr)
+        return 2
+    mark_uncertain_send(issue.date, pending, phase="send", broadcast_id=broadcast_id)
+    _note_save_state()
+    try:
         send_broadcast(api_key=api_key, broadcast_id=broadcast_id)
+    except AmbiguousSend as exc:
+        print(str(exc), file=sys.stderr)
+        print(f"Left {issue.date} uncertain. Not retrying the broadcast send.", file=sys.stderr)
+        return 2
     except SendError as exc:
         print(str(exc), file=sys.stderr)
-        print("Not recording the issue as sent.", file=sys.stderr)
+        print("Not recording the issue as sent. The uncertain block stays.", file=sys.stderr)
         return 2
+    clear_uncertain_send(issue.date, pending)
 
     record_successful_send(
         issue,
@@ -282,7 +675,11 @@ def main(argv=None) -> int:
         retention_days=int(config.get("state_retention_days") or 21),
     )
     _note_sent()
-    print(f"Sent {issue.date} as broadcast {broadcast_id}.", file=sys.stderr)
+    print(
+        f"Submitted {issue.date} as broadcast {broadcast_id}. "
+        "Delivery is not verified until a later check sees last_event delivered.",
+        file=sys.stderr,
+    )
     return 0
 
 

@@ -1360,33 +1360,43 @@ If an item cannot support 2 factual sentences, omit it.
 """
 
 
-def _still_invalid(exc: SchemaError, *, short_body: bool) -> SchemaError:
+def _still_invalid(exc: SchemaError, *, short_body: bool, rewrites: int) -> SchemaError:
     text = str(exc)
+    word = "once" if rewrites == 1 else "twice"
     if short_body or "at least 2 sentences" in text:
-        return SchemaError(f"{text} Retried once; the body is still too short to publish.")
-    return SchemaError(f"{text} Retried once; the items schema is still invalid.")
+        return SchemaError(f"{text} Retried {word}; the body is still too short to publish.")
+    return SchemaError(f"{text} Retried {word}; the items schema is still invalid.")
 
 
 def _schema_or_retry(payload, prompt: str, api_key: str, model: str):
-    """Accept a full body. One rewrite if the schema is still wrong."""
+    """Accept a full body.
+
+    A short body gets one rewrite. An items field that is not a list gets two,
+    because that shape wiped a good batch on 3 Nov 2026 when the first rewrite
+    was still malformed.
+    """
     payload = _coerce_payload(payload)
-    try:
-        _require_schema(payload)
-        return payload
-    except SchemaError as exc:
-        short_body = "at least 2 sentences" in str(exc)
-        print(f"Warning: {exc} Retrying once.", file=sys.stderr)
-        repair = _repair_prompt(prompt, payload) if short_body else _items_repair_prompt(prompt, exc)
+    rewrites = 0
+    while True:
         try:
-            raw = _call_together(repair, api_key, model)
-        except SchemaError as again:
-            raise _still_invalid(again, short_body=short_body) from again
-        retried = _coerce_payload(_parse_json_object(raw))
-        try:
-            _require_schema(retried)
-        except SchemaError as again:
-            raise _still_invalid(again, short_body=short_body) from again
-        return retried
+            _require_schema(payload)
+            return payload
+        except SchemaError as exc:
+            short_body = "at least 2 sentences" in str(exc)
+            allowed = 1 if short_body else 2
+            if rewrites >= allowed:
+                raise _still_invalid(exc, short_body=short_body, rewrites=rewrites) from exc
+            rewrites += 1
+            print(
+                f"Warning: {exc} Retrying ({rewrites}/{allowed}).",
+                file=sys.stderr,
+            )
+            repair = _repair_prompt(prompt, payload) if short_body else _items_repair_prompt(prompt, exc)
+            try:
+                raw = _call_together(repair, api_key, model)
+            except SchemaError as again:
+                raise _still_invalid(again, short_body=short_body, rewrites=rewrites) from again
+            payload = _coerce_payload(_parse_json_object(raw))
 
 
 _MARKDOWN_DUMP = re.compile(r"(\| ---|```|^# |license:\s*mit)", re.I | re.M)
@@ -1812,11 +1822,13 @@ def _rank_finalists(articles: list, api_key: str, model: str, **kwargs) -> tuple
         batch = articles[start:start + _RANK_BATCH]
         try:
             _lede, pairs = _compose_group(batch, api_key, model, **kwargs)
-        except SchemaError as exc:
+        except AuthError:
+            raise
+        except Exception as exc:
             failures.append(exc)
             print(
                 f"Warning: ranking batch {start // _RANK_BATCH + 1} "
-                f"({len(batch)} stories) failed schema validation: {exc} "
+                f"({len(batch)} stories) failed: {exc} "
                 "Continuing with the other batches.",
                 file=sys.stderr,
             )
@@ -1870,12 +1882,16 @@ def compose_briefing(
             return "", []
         try:
             return _compose_group(finalists, api_key, model, pool=articles, **kwargs)
-        except SchemaError as exc:
+        except AuthError:
+            raise
+        except Exception as exc:
             kept = list(salvaged or [])[:limit]
             if not kept:
-                raise
+                if isinstance(exc, SchemaError):
+                    raise
+                raise _not_publishing(exc) from exc
             print(
-                f"Warning: final ranking pass failed schema validation: {exc} "
+                f"Warning: final ranking pass failed: {exc} "
                 "Using the stories already accepted from the batch passes.",
                 file=sys.stderr,
             )

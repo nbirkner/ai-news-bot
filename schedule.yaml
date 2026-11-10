@@ -1,0 +1,6 @@
+# First Monday the GitHub schedule may send, and the first Monday it may
+# call missed. Empty means scheduled runs do not send and do not alarm.
+# Leave this empty until the owner wants automatic sends. Setting a past
+# Monday would alarm for every Monday since then. A merge with this empty
+# does not send, including on a Monday evening.
+send_from: ""

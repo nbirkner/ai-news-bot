@@ -930,7 +930,7 @@ def test_a_single_object_items_field_is_published_without_a_retry(monkeypatch):
     assert lede
 
 
-def test_items_that_are_not_a_list_retry_once_then_block(monkeypatch):
+def test_items_that_are_not_a_list_retry_twice_then_block(monkeypatch):
     prompts = []
 
     def fake_call(prompt, api_key, model):
@@ -946,12 +946,13 @@ def test_items_that_are_not_a_list_retry_once_then_block(monkeypatch):
             strict_auth=True,
             require_full_body=True,
         )
-    assert len(prompts) == 2
+    assert len(prompts) == 3
     assert "must be a JSON list" in prompts[1]
+    assert "must be a JSON list" in prompts[2]
     message = str(exc.value)
     assert "items must be a list" in message
     assert "got dict" in message
-    assert "Retried once" in message
+    assert "Retried twice" in message
     assert "still invalid" in message
 
 
@@ -994,6 +995,38 @@ def test_one_bad_ranking_batch_does_not_discard_the_issue(monkeypatch):
     assert any("must be a JSON list" in prompt for prompt in prompts)
     assert any(row[0].url == rich.url and "71.5%" in row[2] for row in pairs)
     assert all("Desk note" not in row[0].title for row in pairs)
+    assert lede
+
+
+def test_a_later_batch_timeout_keeps_stories_already_accepted(monkeypatch):
+    import requests
+    rich = _rich_article()
+    articles = [rich]
+    for index in range(1, 9):
+        articles.append(_article(
+            f"Desk note {index} about office hours",
+            "A calendar hold was moved.",
+        ))
+        articles[-1].url = f"https://example.com/desk-{index}"
+
+    def fake_call(prompt, api_key, model):
+        if "Desk note 8" in prompt:
+            raise requests.Timeout("read timeout=120")
+        return json.dumps({
+            "lede": "Tokens and dollars moved apart.",
+            "items": [_ranked_item()],
+        })
+
+    monkeypatch.setattr("src.summarize._call_together", fake_call)
+    lede, pairs = compose_briefing(
+        articles,
+        "sk-test",
+        "zai-org/GLM-5.3",
+        strict_auth=True,
+        require_full_body=True,
+        limit=7,
+    )
+    assert any(row[0].url == rich.url and "71.5%" in row[2] for row in pairs)
     assert lede
 
 

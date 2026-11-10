@@ -848,6 +848,29 @@ def in_window(published: datetime, since: datetime, now: datetime) -> bool:
     return since <= published <= now + timedelta(hours=6)
 
 
+def retryable_fetch_error(exc: BaseException) -> bool:
+    """One retry for a timeout or a 5xx. A 401, 403, or 404 is not worth a second hit."""
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        return status >= 500
+    text = str(exc)
+    if any(token in text for token in ("401", "403", "404")):
+        return False
+    return True
+
+
+def call_with_one_retry(fn, name: str):
+    try:
+        return fn()
+    except Exception as exc:
+        if not retryable_fetch_error(exc):
+            raise
+        print(f"Warning: {name} failed ({exc}). Retrying once.", file=sys.stderr)
+        return fn()
+
+
 def fetch_all(config: dict, since: datetime, now: datetime | None = None) -> FetchReport:
     now = now or datetime.now(timezone.utc)
     max_per_source = int(config.get("max_per_source", 8))
@@ -866,7 +889,7 @@ def fetch_all(config: dict, since: datetime, now: datetime | None = None) -> Fet
             payload = dict(source)
             payload["_since"] = since
             payload["_until"] = now
-            fetched = fetcher(payload)
+            fetched = call_with_one_retry(lambda: fetcher(payload), source.get("name") or "?")
             successes += 1
         except Exception as exc:
             failures.append(f"{source['name']}: {exc}")
