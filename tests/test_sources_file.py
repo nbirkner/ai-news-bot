@@ -93,13 +93,23 @@ def _write(directory: Path, name: str, payload) -> Path:
     return path
 
 
-def test_window_end_date_is_the_pacific_monday():
+def test_window_end_date_is_the_pacific_calendar_day():
     assert window_end_filename_date(NOW) == "2026-10-19"
     assert window_end_filename_date(MONDAY_PT) == "2026-10-19"
     assert window_end_filename_date(datetime(2026, 12, 14, 17, tzinfo=timezone.utc)) == "2026-12-14"
     # 06:30 UTC Tuesday is still Monday evening in Pacific daylight time.
     assert window_end_filename_date(datetime(2026, 10, 20, 6, 30, tzinfo=timezone.utc)) == "2026-10-19"
     assert sources_path_for(MONDAY_PT).as_posix() == "sources/2026-10-19.json"
+    # 17:00 UTC Friday is 09:00 PST Friday. The filename is that Friday.
+    assert window_end_filename_date(datetime(2026, 11, 13, 17, tzinfo=timezone.utc)) == "2026-11-13"
+    assert sources_path_for(datetime(2026, 11, 2, 17, tzinfo=timezone.utc)).as_posix() == "sources/2026-11-02.json"
+
+
+def test_committed_monday_source_files_still_load():
+    for name in ("2026-10-26.json", "2026-11-02.json"):
+        loaded = load_sources_file(Path("sources") / name)
+        assert loaded.status == "ok", loaded.error
+        assert loaded.articles
 
 
 def test_schema_lists_the_documented_fields():

@@ -1,6 +1,6 @@
 # AI briefing
 
-One public AI news issue, generated once, then rendered as site MDX and as email HTML. The Monday issue is broadcast with Resend. Slack posting and the site publish are separate and are not turned on.
+One public AI news issue, generated once, then rendered as site MDX and as email HTML. The Friday issue is broadcast with Resend. Slack posting and the site publish are separate and are not turned on.
 
 The copy is a general briefing for people building with AI. It does not take a Together product, customer, revenue, or competitor angle, and it does not use internal names. Sources are public pages with public URLs.
 
@@ -18,11 +18,11 @@ python3 main_newsletter.py --dry-run --window-end 2026-10-16
 python3 main_newsletter.py --dry-run --window-end 2026-10-19
 ```
 
-A date means 15:00 UTC on that day (the Monday / Wednesday / Friday slot). The window opens at the previous slot, so `--window-end 2026-10-19` covers Friday 16 Oct 15:00 UTC through Monday 19 Oct 15:00 UTC.
+A date means 15:00 UTC on that day (the Monday / Wednesday / Friday slot). The window opens at the previous slot, so `--window-end 2026-10-19` covers Friday 16 Oct 15:00 UTC through Monday 19 Oct 15:00 UTC. The Friday workflow does not use that shorter slot. It passes a start seven days before the window end, so a Friday issue opens on the previous Friday at 15:00 UTC. An explicit Monday date, including `2026-10-26`, `2026-11-02`, and `2026-11-09`, still opens seven days earlier.
 
 ### Weekly sources file
 
-The Monday newsletter (Monday 9 AM PT) looks first for a committed file, `sources/<YYYY-MM-DD>.json`. The date is the window end on the Pacific calendar, so that Monday run reads `sources/2026-10-19.json` when `--window-end` is `2026-10-19`. The schema and an example are in [`sources/README.md`](sources/README.md).
+The Friday newsletter (Friday 9 AM PT) looks first for a committed file, `sources/<YYYY-MM-DD>.json`. The date is the window end on the Pacific calendar, so that Friday run reads `sources/2026-11-13.json` when `--window-end` is `2026-11-13`. A Monday date still reads that Monday's file: `--window-end 2026-10-19` reads `sources/2026-10-19.json`, and `sources/2026-11-02.json` stays valid. The schema and an example are in [`sources/README.md`](sources/README.md).
 
 The file is a JSON list. Each item is an object with this schema:
 
@@ -56,19 +56,19 @@ Without `TOGETHER_API_KEY` the run still builds an issue from the article text a
 
 ### Weekly send
 
-Mondays at 9:00 AM America/Los_Angeles is the goal. Nothing in this repo currently starts a send at that time. The existing Monday 9:00 routine counts subscribers. It does not send AI News. The Grok source-gather routine has already failed for lack of usage, so pointing that routine at this workflow would not be a reliable 9:00 clock either. A real 9:00 send needs a new trigger that the owner approves. One option on the existing Vercel account is a cron on the `site` project. That needs its own branch, config, and deploy approval. This PR does not add that project, that cron, or any other service.
+Fridays at 9:00 AM America/Los_Angeles is the goal. Nothing in this repo currently starts a send at that time. The existing Monday 9:00 routine counts subscribers. It does not send AI News. The Grok source-gather routine has already failed for lack of usage, so pointing that routine at this workflow would not be a reliable 9:00 clock either. A real 9:00 send needs a new trigger that the owner approves. One option on the existing Vercel account is a cron on the `site` project. That needs its own branch, config, and deploy approval. This PR does not add that project, that cron, or any other service.
 
-GitHub's cron is a late catch-up only, and it is disarmed. It does not promise 9:00 AM. It has started hours late and can drop a week entirely. `schedule.yaml` `send_from` is empty, so scheduled runs do not send and do not alarm. A merge on Monday evening does not mail anyone. Set `send_from` to the first Monday that should go out, and only then. A past date would alarm for every Monday since then. After it is set, a later Monday reports any armed Monday that was never sent, and it does not report weeks before `send_from`. The alarm is a failed Actions job, not an email or a Slack message.
+GitHub's cron is a late catch-up only, and it is disarmed. It does not promise 9:00 AM. It has started hours late and can drop a week entirely. `schedule.yaml` `send_from` is empty, so scheduled runs do not send and do not alarm. A merge on Friday evening does not mail anyone. Set `send_from` to the first Friday that should go out, and only then. A past date would alarm for every Friday since then. After it is set, a later Friday reports any armed Friday that was never sent, and it does not report weeks before `send_from`. The alarm is a failed Actions job, not an email or a Slack message.
 
-`workflow_dispatch` is how a new approved trigger, or a person, can run one issue. `dry_run` defaults to true. `window_end` is the Monday of that issue. `allow_off_monday` defaults to false, so a weekend dispatch does not send. This PR does not create the trigger.
+`workflow_dispatch` is how a new approved trigger, or a person, can run one issue. `dry_run` defaults to true. A blank `window_end` is the Friday of the current America/Los_Angeles week, at 15:00 UTC. An explicit date is used as given, so a Monday `window_end` still addresses that Monday. `allow_off_day` defaults to false. A Friday issue waits for Friday, and a Monday issue still waits for Monday, so a weekend dispatch does not send. The backfill of `2026-10-26`, `2026-11-02`, and `2026-11-09` sets that override. This PR does not create the trigger.
 
-The backup crons run every hour from 16:00 UTC Monday through 07:00 UTC Tuesday, and at 08:30 UTC Tuesday through Thursday. A second run does not send again when `state/sent_issues.json` lists the date, when `state/pending_sends.json` marks that date uncertain, or when Resend already shows an email with that exact subject or a submitted broadcast with that name. A font-test subject is not this issue. A provider list error does not send. An empty list does not clear an uncertain block.
+The backup crons run every hour from 16:00 UTC Friday through 07:00 UTC Saturday, and at 08:30 UTC Saturday through Monday. A second run does not send again when `state/sent_issues.json` lists the date, when `state/pending_sends.json` marks that date uncertain, or when Resend already shows an email with that exact subject or a submitted broadcast with that name. The subject stays `AI News, November 13, 2026` for a Friday issue and `AI News, November 2, 2026` for that Monday, with no weekday in the line. A font-test subject is not this issue. A provider list error does not send. An empty list does not clear an uncertain block.
 
 `Idempotency-Key` is a Resend guarantee only for `POST /emails` (and batch and inbox sends), for 24 hours, and only when the payload is unchanged. The same key with a different body is a 409 and does not send the new body. Test emails use that key. Create broadcast and send broadcast do not document it, so those calls are not retried. A timeout or a 5xx leaves `pending_sends.json` uncertain and later runs refuse another broadcast POST until the date is reconciled. `--clear-pending` only removes that block. It does not send. If the runner is destroyed before that file is saved to the Actions cache, a later run cannot see the block. That gap needs a store outside the job. This repo does not add one.
 
-The window ends at 15:00 UTC that Monday. It opens seven days earlier, the previous Monday at 15:00 UTC.
+The window ends at 15:00 UTC that Friday. It opens seven days earlier, the previous Friday at 15:00 UTC. A Monday window end still ends at 15:00 UTC that Monday and opens seven days earlier.
 
-`--send` creates a Resend broadcast to the audience in `RESEND_AUDIENCE_ID`, from `Niki Birkner <ainews@nikibirkner.com>`. The subject is `email_subject()` (`AI News, October 19, 2026` for that issue). The HTML is `render_email(broadcast=True)` and the text is `render_plain(broadcast=True)`. Resend is then told to send that broadcast, using `RESEND_API_KEY`.
+`--send` creates a Resend broadcast to the audience in `RESEND_AUDIENCE_ID`, from `Niki Birkner <ainews@nikibirkner.com>`. The subject is `email_subject()` (`AI News, October 19, 2026` for that Monday, `AI News, November 13, 2026` for that Friday). The byline names the weekday of the issue date, so a Monday issue still says Monday and a Friday issue says Friday. The HTML is `render_email(broadcast=True)` and the text is `render_plain(broadcast=True)`. Resend is then told to send that broadcast, using `RESEND_API_KEY`.
 
 The send does not run when the issue has no stories, when that issue date is already in `state/sent_issues.json`, when that date is uncertain in `state/pending_sends.json`, or when Resend already has an email object or a submitted broadcast for that subject. The seen-article list, the recent briefings, and that sent-date file are written only after Resend returns success for the send. The recorded delivery is `unverified` until a later read. `python3 main_newsletter.py --verify-delivery --window-end YYYY-MM-DD` GETs `/emails` and stores the provider email id and `last_event`. `last_event` of `sent` means Resend accepted the message. It does not mean the mailbox delivered it. `delivered`, `opened`, and `clicked` do. The command does not send. The Actions cache is saved after a successful broadcast and after an uncertain block is written. A dry run and a test email do not mark the issue sent.
 
@@ -76,7 +76,7 @@ Slack is not posted. The site repo is not updated. `SLACK_WEBHOOK_URL` and `SITE
 
 ## Ingest from the Learning bot
 
-The Learning bot is the content source for the weekly files. The Monday send path (9:00 AM America/Los_Angeles, `--send`, `--test-to`, and `state/sent_issues.json`) is unchanged.
+The Learning bot is the content source for the weekly files. The Friday send path (9:00 AM America/Los_Angeles, `--send`, `--test-to`, and `state/sent_issues.json`) is the newsletter send. A Monday `--window-end` still uses that same path.
 
 ### News roundup
 
@@ -84,7 +84,7 @@ The Learning bot is the content source for the weekly files. The Monday send pat
 
 It writes `sources/YYYY-MM-DD.json` in the weekly sources schema (`title`, `url`, `source`, `published`, `summary`, and `reflection` when the story has one). `published` is the file date. One broken story rejects the file. A missing roundup writes nothing and exits 2.
 
-`--render` also writes `out/YYYY-MM-DD.mdx`, `.html`, and `.txt` in the Monday email template. The inbox title stays `AI News, October 19, 2026` for that date. The command does not send.
+`--render` also writes `out/YYYY-MM-DD.mdx`, `.html`, and `.txt` in the weekly email template. The inbox title stays `AI News, October 19, 2026` for that date, with no weekday in the subject. The command does not send.
 
 ```bash
 python3 scripts/ingest_news.py --date 2026-10-19 --render
@@ -94,7 +94,7 @@ python3 scripts/ingest_news.py --date 2026-10-19 --render
 
 `python3 main_newsletter.py --mode lesson --dry-run --date 2026-10-20` reads `/cursor/stores/bot/ai-lessons-weekly/YYYY-MM-DD-slug.md` (`LESSON_WEEKLY_DIR` overrides the directory). The file is the public lesson format, including frontmatter `title`, `date`, `level` (`Foundations`, `Systems`, or `Frontier`), `slug`, and `summary`. A valid file is copied to `out/YYYY-MM-DD-slug.mdx` for the site. A missing file, a bad level, or a draft that skips a required section writes only `out/YYYY-MM-DD.blocked.txt` containing `BLOCKED: <reason>`. `--send`, `--post`, and `--publish` exit 2. The command never calls Resend.
 
-When the Monday newsletter renders and that week's lesson file is present and valid, the issue gains a **This week's lesson** section (title, summary, and the lesson link). No file means the section is left out and the issue still renders.
+When the Friday newsletter renders and that week's lesson file is present and valid, the issue gains a **This week's lesson** section (title, summary, and the lesson link). The week is still Monday through Sunday, so a Friday issue and a Monday-dated issue both use the lesson filed in that calendar week. No file means the section is left out and the issue still renders.
 
 ### Cost lines in the usage log
 
@@ -154,10 +154,10 @@ Repo **Settings → Secrets and variables → Actions → New repository secret*
 | `TOGETHER_API_KEY` | Niki's **personal** Together API key from [api.together.ai/settings/api-keys](https://api.together.ai/settings/api-keys). Not a Together company key. |
 | `SLACK_WEBHOOK_URL` | The incoming webhook from step 2 |
 | `EXA_API_KEY` | An Exa key from [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys). Used only when `EXA_ENABLED=1`. |
-| `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Monday send reads this. A dry run does not. |
-| `RESEND_AUDIENCE_ID` | The Resend audience (segment) id the Monday broadcast is sent to. Same secret the site signup uses. |
+| `RESEND_API_KEY` | A Resend API key that can create and send broadcasts. The Friday send reads this. A dry run does not. |
+| `RESEND_AUDIENCE_ID` | The Resend audience (segment) id the Friday broadcast is sent to. Same secret the site signup uses. |
 
-`EXA_API_KEY` is optional. Exa is off unless the environment variable `EXA_ENABLED` is `1` (the workflow passes the `EXA_ENABLED` repository variable, default `0`). The Monday newsletter otherwise uses `sources/<YYYY-MM-DD>.json` plus RSS, and falls back to RSS when that file is missing or invalid. Mon/Wed/Fri briefings use RSS only. With Exa enabled, each run also searches for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
+`EXA_API_KEY` is optional. Exa is off unless the environment variable `EXA_ENABLED` is `1` (the workflow passes the `EXA_ENABLED` repository variable, default `0`). The Friday newsletter otherwise uses `sources/<YYYY-MM-DD>.json` plus RSS, and falls back to RSS when that file is missing or invalid. A Monday-dated sources file is still read when that date is the window end. Mon/Wed/Fri briefings use RSS only. With Exa enabled, each run also searches for model releases, pricing, inference and chips, open weights, policy, funding, agent launches and incidents, and data-center power. Searches are limited to the lookback window.
 
 **Call cap.** When Exa is on, `/search` and `/contents` calls share one hard cap, default **6** per run. The log line is `Exa calls: N/6`. Override it with the `EXA_MAX_CALLS` environment variable, or with a repository variable of the same name (the workflow passes that variable through, default `6`). If Exa errors or the account runs out of credits, the run keeps whatever Exa already returned and continues on the feeds and the weekly sources file.
 
@@ -175,11 +175,12 @@ On a new or forked repo, GitHub leaves Actions off until someone turns them on. 
 
 The dispatch form also has:
 
-- **window_end**: `YYYY-MM-DD`. The window ends at 15:00 UTC that day. Leave it blank to use the Monday of the current America/Los_Angeles week.
+- **window_end**: `YYYY-MM-DD`. The window ends at 15:00 UTC that day. Leave it blank to use the Friday of the current America/Los_Angeles week. A Monday date is used as that Monday.
 - **dry_run**: checked by default. A manual run sends only when this is unchecked.
 - **test_to**: an email address. When dry_run is unchecked, the run sends one email to that address via Resend `/emails` instead of the broadcast. Unsubscribe in that copy points at the archive, because Resend fills `{{{RESEND_UNSUBSCRIBE_URL}}}` on a broadcast only. A test email does not mark the issue sent and it does not save the cache. The field is ignored while dry_run is checked.
+- **allow_off_day**: unchecked by default. A Friday issue sends on Friday in America/Los_Angeles. A Monday `window_end` still sends on Monday. Check it only for a catch-up, including the backfill of `2026-10-26`, `2026-11-02`, and `2026-11-09`.
 
-The Monday schedule sends the broadcast on its own. Uncheck **dry_run** only when a manual run should send. That send is the email, not a Slack post and not a site commit.
+The Friday schedule sends the broadcast on its own. Uncheck **dry_run** only when a manual run should send. That send is the email, not a Slack post and not a site commit.
 
 Local equivalent, which also never posts:
 
@@ -203,18 +204,18 @@ Without `EXA_ENABLED=1` the script still prints feed candidates and logs `Exa ca
 
 | | |
 | --- | --- |
-| Day | Monday |
+| Day | Friday |
 | Clock | 9:00 AM America/Los_Angeles, year-round |
-| UTC crons | `0 16-23 * * 1`, `0 0-7 * * 2`, and `30 8 * * 2,3,4` |
-| Guard | On schedule, send when America/Los_Angeles is Monday and the hour is 9 through 23. After Monday, fail the job if that issue was not sent. |
+| UTC crons | `0 16-23 * * 5`, `0 0-7 * * 6`, and `30 8 * * 6,0,1` |
+| Guard | On schedule, send when America/Los_Angeles is Friday and the hour is 9 through 23. After Friday, fail the job if that issue was not sent. |
 
-GitHub's scheduler is UTC and does not follow daylight saving. `16:00 UTC` is 9:00 AM during Pacific daylight time and 8:00 AM during standard time. `17:00 UTC` is 9:00 AM standard time. `07:00 UTC` Tuesday is still 11:00 PM Monday in standard time and midnight Tuesday in daylight time. `08:30 UTC` is after Monday in both. The hourly crons do not make GitHub start at 9:00 AM. They give a late start somewhere to land while it is still Monday. The Tue/Wed/Thu 08:30 UTC runs fail the job when the issue is still unsent. That failed job is the alert. If GitHub drops those runs too, nothing notifies anyone. A manual run is not subject to the guard. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the exact provider subject and does not broadcast again. `queued`, `delivery_delayed`, and `sent` are not delivered. Inbox delivery stays a separate `--verify-delivery` read.
+GitHub's scheduler is UTC and does not follow daylight saving. `16:00 UTC` is 9:00 AM during Pacific daylight time and 8:00 AM during standard time. `17:00 UTC` is 9:00 AM standard time. `07:00 UTC` Saturday is still 11:00 PM Friday in standard time and midnight Saturday in daylight time. `08:30 UTC` is after Friday in both. The hourly crons do not make GitHub start at 9:00 AM. They give a late start somewhere to land while it is still Friday. The Sat/Sun/Mon 08:30 UTC runs fail the job when the issue is still unsent. That failed job is the alert. If GitHub drops those runs too, nothing notifies anyone. A manual run is not subject to the schedule guard. A Friday dispatch waits for Friday, and a Monday `window_end` still waits for Monday, unless `allow_off_day` is set. If another scheduled run lands after a successful submit, it sees the issue date in `state/sent_issues.json` or the exact provider subject and does not broadcast again. `queued`, `delivery_delayed`, and `sent` are not delivered. Inbox delivery stays a separate `--verify-delivery` read.
 
-The scheduled window ends at 15:00 UTC that Monday and opens at 15:00 UTC the Monday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot.
+The scheduled window ends at 15:00 UTC that Friday and opens at 15:00 UTC the Friday before. A local dry run without `--window-start` still opens at the previous Monday, Wednesday, or Friday slot. An explicit Monday window end passed with `--window-start` seven days earlier still covers that Monday's week.
 
 ## What gets posted
 
-The Monday workflow sends the email. It does not post to Slack and it does not commit the MDX to the site. A manual run with **dry_run** checked sends nothing.
+The Friday workflow sends the email. It does not post to Slack and it does not commit the MDX to the site. A manual run with **dry_run** checked sends nothing.
 
 A lede, then four to seven stories when the window supports it, and fewer when it does not. Stories are ranked for people building with AI, with the last five issues in mind so a repeat link is skipped. Slack, the site, and the email are three renders of that same issue.
 
@@ -235,7 +236,7 @@ Sources live in `config.yaml`:
 - DeepSeek, Qwen, and Moonshot model releases on Hugging Face, plus Hugging Face trending text models created in the window
 - vLLM and SGLang GitHub releases
 - arXiv (`cs.CL`, `cs.LG`, `cs.AI`, title keywords only)
-- The Monday newsletter also reads `sources/<YYYY-MM-DD>.json` (see above) before the feeds
+- The Friday newsletter also reads `sources/<YYYY-MM-DD>.json` (see above) before the feeds. Monday-dated files such as `sources/2026-11-02.json` stay valid
 - Exa search across the same themes, scoped to the window, only when `EXA_ENABLED=1`
 
 To add a source, append an entry. `type` is `rss`, `html` (`parser: anthropic` or `parser: meta`), `reuters`, `arxiv`, or `huggingface`. `priority` decides which copy wins when two sources run the same story (lower number wins). `kind` is `lab`, `news`, `release`, or `paper`.
@@ -265,4 +266,4 @@ Tests do not call Slack, Together, or Exa. HTTP is mocked. Pull requests and pus
 5. A small Vercel function, not a client-side call to Resend. `POST /api/newsletter/subscribe` with `{ email }` creates a Resend contact in `RESEND_AUDIENCE_ID` as unsubscribed and emails a confirm link. `GET /api/newsletter/confirm?token=...` sets the contact to subscribed. That is the double opt-in. The function reads `RESEND_API_KEY` from Vercel env. The browser never sees the key.
 6. Resend domain verification for `nikibirkner.com` (SPF, DKIM, and the return-path Resend shows in the dashboard) for mail from `ainews@nikibirkner.com`.
 
-The Monday send broadcasts the HTML this command writes. It does not commit the MDX to `src/content/newsletter/`. That publish step stays off until it is approved on its own. The model credential remains the personal `TOGETHER_API_KEY` only.
+The Friday send broadcasts the HTML this command writes. It does not commit the MDX to `src/content/newsletter/`. That publish step stays off until it is approved on its own. The model credential remains the personal `TOGETHER_API_KEY` only.
