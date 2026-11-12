@@ -10,18 +10,20 @@ Slack and it does not publish the site.
     python main_newsletter.py --mode lesson --dry-run --date 2026-10-20
 
 `--mode lesson` reads one Learning-bot lesson file and writes site MDX.
-It never sends. The default mode is still the Monday news issue.
+It never sends. The default mode is still the weekly news issue.
 
 Reads TOGETHER_API_KEY (a personal key, not a company key) and EXA_API_KEY
 from the environment. A real send also reads RESEND_API_KEY and
 RESEND_AUDIENCE_ID. Missing model keys skip that source and still write ./out/.
-The Monday run looks for sources/<YYYY-MM-DD>.json (the window end on the
-Pacific calendar) and uses it plus RSS. A missing or invalid file falls back
-to RSS only. Exa runs only when EXA_ENABLED=1, capped by EXA_MAX_CALLS
-(default 6).
+The Friday run looks for sources/<YYYY-MM-DD>.json (the window end on the
+Pacific calendar) and uses it plus RSS. A Monday window end still reads that
+Monday's file, including sources/2026-11-02.json. A missing or invalid file
+falls back to RSS only. Exa runs only when EXA_ENABLED=1, capped by
+EXA_MAX_CALLS (default 6).
 A date window end is 15:00 UTC on that day. Without --window-start the window
-opens at the previous Monday, Wednesday, or Friday slot. The Monday workflow
-passes the previous Monday as the start.
+opens at the previous Monday, Wednesday, or Friday slot. The Friday workflow
+passes a start seven days earlier, the previous Friday when the end is a
+Friday. An explicit Monday window end still opens on the previous Monday.
 """
 import os
 import sys
@@ -510,7 +512,7 @@ def main(argv=None) -> int:
         allowed, why = manual_send_allowed(
             _dispatch_now(),
             issue_date,
-            allow_off_monday=_truthy(os.environ.get("ALLOW_OFF_MONDAY", "")),
+            allow_off_day=_truthy(os.environ.get("ALLOW_OFF_DAY", "")),
         )
         if not allowed:
             print(why, file=sys.stderr)

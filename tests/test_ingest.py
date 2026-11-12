@@ -202,11 +202,12 @@ def test_there_is_no_tuesday_lessons_email():
     assert 'cron: "0 17 * * 2"' not in monday
 
 
-def test_monday_send_workflow_catches_a_late_start():
+def test_friday_send_workflow_catches_a_late_start():
     text = Path(".github/workflows/briefing.yml").read_text(encoding="utf-8")
-    assert 'cron: "0 16-23 * * 1"' in text
-    assert 'cron: "0 0-7 * * 2"' in text
-    assert 'cron: "30 8 * * 2,3,4"' in text
+    assert 'cron: "0 16-23 * * 5"' in text
+    assert 'cron: "0 0-7 * * 6"' in text
+    assert 'cron: "30 8 * * 6,0,1"' in text
+    assert 'cron: "0 16-23 * * 1"' not in text
     assert "09-12" not in text
     assert "--send" in text
     assert "--verify-delivery" in text
