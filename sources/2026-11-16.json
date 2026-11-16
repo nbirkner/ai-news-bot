@@ -1,0 +1,82 @@
+[
+  {
+    "title": "Jensen Huang resigned as Nvidia CEO and left the board",
+    "url": "https://www.cnbc.com/2026/11/12/nvidia-nvda-jensen-huang-second-affair.html",
+    "source": "CNBC",
+    "summary": "Huang stepped down immediately on November 12, days after admitting an affair with an executive whom, per the Financial Times, US intelligence officials believe is a Chinese spy. CFO Colette Kress is interim CEO and former Synopsys CEO Harvey C. Jones becomes Nvidia's first-ever board chair. Shares closed down 4.34% after falling as much as 14% intraday, and Bernstein cut its price target from $400 to $200.",
+    "published": "2026-11-12",
+    "reflection": "Nvidia had no named successor, so the company at the center of AI compute now has a key-person gap just as export-policy fights with Washington and Beijing intensify."
+  },
+  {
+    "title": "Anthropic launched its IPO roadshow at an implied valuation of up to $1.404 trillion",
+    "url": "https://techcrunch.com/2026/11/10/anthropic-sets-ipo-price-range-of-70-to-78-per-share-to-reach-an-implied-valuation-of-1-404-trillion/",
+    "source": "TechCrunch",
+    "summary": "Anthropic is offering 825 million Class A shares at $70 to $78 each under the Nasdaq ticker \"ANT,\" raising $57.75 billion to $64.35 billion, plus a separate $26 billion private sale to AMD, Broadcom, Google, Micron, Microsoft, Nvidia, and TSMC. The updated filing shows $81 billion in run-rate revenue at the end of October, $17 billion in Q3 revenue, and a nine-month net loss of $104 billion. Trading is expected to start close to November 19, per CNBC reporting cited by TechCrunch.",
+    "published": "2026-11-10",
+    "reflection": "Public buyers get limited say, since founders hold 50.1% of voting power and the Long-Term Benefit Trust elects a board majority, so this tests how much the market will pay for AI growth with almost no governance control."
+  },
+  {
+    "title": "Anthropic shipped Claude Fable 5.2 and Mythos 5.2, faster and 20% cheaper",
+    "url": "https://www.anthropic.com/claude-fable-and-mythos-5-2",
+    "source": "Anthropic",
+    "summary": "The two are the same underlying model: Fable is generally available with cyber and biology safeguards, while Mythos is limited to vetted security and life-sciences organizations. Pricing is $8 per million input tokens and $40 per million output, outputs come up to 30% faster than 5.1, and an optional fast mode runs up to 2.5x faster at $16 and $80. Anthropic says prerelease testing included formalizing the proof of Fermat's Last Theorem in 30 hours.",
+    "published": "2026-11-09",
+    "reflection": "Shipping one model under two names with different safeguards is becoming the standard way frontier labs release dual-use capability, and access programs, not the model itself, are now the product boundary."
+  },
+  {
+    "title": "Google released Gemini 4 Carbon at the top end and Gemini 4 Hydrogen as its fast default",
+    "url": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/",
+    "source": "Google",
+    "summary": "Carbon, out November 10, costs $2 per million input tokens and $10 output through November 30, then $4 and $20, and Google says it ranks first on CursorBench 4.0 at more than 2x lower cost per task than the next best external model. Hydrogen, out November 12, is priced flat at $1.50 and $7.50 across a 1M-token context and scores 57% on Terminal-Bench 4.1 versus 18.2% for Gemini 3.8 Flash. A new Antigravity mode called Orchestrator switches between Carbon and Hydrogen mid-session and reached near-Carbon success on Terminal-Bench 4.0 with 24% less quota.",
+    "published": "2026-11-12",
+    "reflection": "Google is selling the routing layer, not just the models, which pushes the \"which model do I pick\" decision from the developer into the platform."
+  },
+  {
+    "title": "The US and China will open a \"superintelligence\" dialogue at next week's Trump-Xi meeting",
+    "url": "https://www.reuters.com/3fec1b0a85a0/world/china/us-china-should-stay-clear-eyed-ai-cooperation-competition-bessent-says-2026-11-11/",
+    "source": "Reuters",
+    "summary": "Treasury Secretary Scott Bessent said the talks in Shenzhen, alongside the November 18 to 19 APEC summit, will cover best practices for testing advanced models before release and keeping human judgment in command. He said the two sides agreed to set up a direct channel to alert each other to serious AI incidents.",
+    "published": "2026-11-11",
+    "reflection": "An incident hotline only carries what someone is obliged to report, and neither country yet has a national rule requiring frontier labs to disclose serious incidents at home."
+  },
+  {
+    "title": "Fireworks AI expanded its breach disclosure to customer datasets and partial model weights",
+    "url": "https://fireworks.ai/security/bulletins/october-2026-security-incident-update",
+    "source": "Fireworks AI",
+    "summary": "An update dated November 9 says attackers reached Fireworks development machines through a third-party cloud provider breached on October 23, exposing billing data and, for a limited set of accounts, secrets, datasets, and incomplete model weights. The original October 9 bulletin said only Fireworks-stored secrets were known to be accessed. Fireworks links the attack to an \"LLMJacking\" group that resells stolen model access and says inference, the Training SDK, and Nexus were not affected.",
+    "published": "2026-11-09",
+    "reflection": "Fine-tuned weights are now the asset attackers target at inference vendors, and zero data retention on the serving path does not protect what sits on R&D machines."
+  },
+  {
+    "title": "Mercor raised $750 million at a $20 billion valuation",
+    "url": "https://www.businesswire.com/news/home/20261110410031/en/Mercor-Raises-%24750-Million-Series-D-at-%2420-Billion-Valuation-to-Help-Enterprises-Own-Their-Intelligence",
+    "source": "Business Wire",
+    "summary": "The Series D for Mercor, which supplies domain experts who train and evaluate AI models, funds evaluation and post-training environments for agents learning professional workflows. It led a busy stretch that also included UK inference-chip maker Fractile's roughly $720 million Series C.",
+    "published": "2026-11-10",
+    "reflection": "Investors are paying a premium for the human-judgment layer of training, a sign that expert evaluation data, not compute, is the scarcer input for enterprise agents."
+  },
+  {
+    "title": "Meta launched Muse Ember, its smallest and cheapest model",
+    "url": "https://simonwillison.net/2026/Nov/10/muse-ember/",
+    "source": "Simon Willison",
+    "summary": "Ember is priced at $0.10 per million input tokens and $0.50 output for prompts up to 200k tokens, matching GPT-6 Luna and Claude Haiku 5.5, and Meta says it sits on the Artificial Analysis efficiency frontier. Simon Willison notes Claude Fable 5.2, released the same day, costs 80x as much.",
+    "published": "2026-11-10",
+    "reflection": "Three labs now share an identical sticker price at the cheap tier, so the real competition has moved to long-context surcharges and how many tokens each model burns per task."
+  },
+  {
+    "title": "OpenAI open-sourced Codex Security as a CLI and TypeScript SDK",
+    "url": "https://github.com/openai/codex-security",
+    "source": "GitHub (OpenAI)",
+    "summary": "The Apache 2.0 tool scans repositories for vulnerabilities, validates findings, and proposes patches, with version 0.10.0 released November 12. It can run inside a team's own CI pipeline.",
+    "published": "2026-11-12",
+    "reflection": "Putting the scanner logic in the open while keeping the model behind an API is a template for how labs can ship security tooling without giving away the capability itself."
+  },
+  {
+    "title": "Australia will consider criminal charges for AI companies that fail to prevent harm",
+    "url": "https://www.abc.net.au/news/2026-11-11/australia-considers-criminal-charges-for-ai-companies/107368676",
+    "source": "ABC News (Australia)",
+    "summary": "The federal government said it will examine a \"failure to prevent\" offence for AI companies whose models cause harm, plus an AI safety watchdog able to issue significant fines. The move follows a review of September's OpenAI-linked hack of a Medicare statistics portal.",
+    "published": "2026-11-11",
+    "reflection": "A failure-to-prevent standard, borrowed from bribery and fraud law, would make labs prove their safeguards were reasonable rather than making regulators prove intent."
+  }
+]
