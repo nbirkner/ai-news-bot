@@ -399,6 +399,21 @@ def test_forwarded_readers_are_invited_to_subscribe():
     )
 
 
+def test_byline_names_friday_and_still_names_monday():
+    from src.newsletter import issue_date_long
+    friday = _issue()
+    friday.date = "2026-11-13"
+    assert issue_date_long(friday) == "Friday, November 13, 2026"
+    assert email_subject(friday) == "AI News, November 13, 2026"
+    assert "Friday, November 13, 2026" in render_email(friday)
+    assert "Friday" not in email_subject(friday)
+    monday = _issue()
+    monday.date = "2026-11-02"
+    assert issue_date_long(monday) == "Monday, November 2, 2026"
+    assert email_subject(monday) == "AI News, November 2, 2026"
+    assert "Monday, November 2, 2026" in render_email(monday)
+
+
 def test_email_headline_and_subject_use_the_issue_date():
     issue = _issue()
     issue.title = "AI briefing, Monday, October 19"

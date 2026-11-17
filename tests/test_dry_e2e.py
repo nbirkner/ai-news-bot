@@ -180,13 +180,19 @@ def test_workflow_yaml_parses_and_a_miss_fails_the_job():
     assert "send_from: \"\"" in Path("schedule.yaml").read_text()
     dispatch = data[True]["workflow_dispatch"]["inputs"]
     assert dispatch["dry_run"]["default"] is True
-    assert dispatch["allow_off_monday"]["default"] is False
+    assert dispatch["allow_off_day"]["default"] is False
+    assert "Friday" in dispatch["allow_off_day"]["description"]
+    assert "Monday" in dispatch["window_end"]["description"]
+    assert "15:00 UTC" in dispatch["window_end"]["description"]
     crons = [item["cron"] for item in data[True]["schedule"]]
-    assert "0 16-23 * * 1" in crons
-    assert "0 0-7 * * 2" in crons
-    assert "30 8 * * 2,3,4" in crons
+    assert "0 16-23 * * 5" in crons
+    assert "0 0-7 * * 6" in crons
+    assert "30 8 * * 6,0,1" in crons
     steps = data["jobs"]["newsletter"]["steps"]
-    miss = next(step for step in steps if step.get("name") == "Monday issue was not sent")
+    miss = next(step for step in steps if step.get("name") == "Friday issue was not sent")
     assert "exit 1" in miss["run"]
-    assert "::error title=Monday AI News was not sent::" in miss["run"]
+    assert "::error title=Friday AI News was not sent::" in miss["run"]
     assert "does not send email" in miss["run"]
+    earlier = next(step for step in steps if step.get("name") == "Earlier Friday was not sent")
+    assert "::error title=Earlier Friday AI News was not sent::" in earlier["run"]
+    assert "does not send another email" in earlier["run"]

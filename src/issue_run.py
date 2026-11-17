@@ -36,17 +36,26 @@ def previous_mwf_slot(end: datetime) -> datetime:
 
 
 def weekly_window_start(end: datetime) -> datetime:
-    """Seven days before `end`. The Monday letter covers the previous Monday through this one."""
+    """Seven days before `end`.
+
+    A Friday letter covers the previous Friday through this one. A Monday
+    window end still covers the previous Monday through that Monday.
+    """
     return _utc(end) - timedelta(days=7)
 
 
-def pacific_monday(moment: datetime | None = None) -> str:
-    """Monday of the America/Los_Angeles week that contains `moment`, as YYYY-MM-DD."""
+def pacific_friday(moment: datetime | None = None) -> str:
+    """Friday of the America/Los_Angeles send week that contains `moment`.
+
+    Blank workflow window ends use this. Saturday through Thursday still
+    belong to the Friday already under way, at 15:00 UTC once the date is
+    parsed. An explicit Monday window end does not come through here.
+    """
+    from src.schedule import target_issue_date
     from zoneinfo import ZoneInfo
-    zone = ZoneInfo("America/Los_Angeles")
-    local = (moment or datetime.now(zone)).astimezone(zone)
-    monday = local - timedelta(days=local.weekday())
-    return monday.strftime("%Y-%m-%d")
+    if moment is None:
+        moment = datetime.now(ZoneInfo("America/Los_Angeles"))
+    return target_issue_date(moment)
 
 
 def parse_window_end(raw: str) -> datetime:
@@ -148,8 +157,9 @@ def generate_issue(
 ) -> tuple:
     """Return (issue, failures, discovery). Never posts or sends.
 
-    The Monday newsletter reads ``sources/<window end>.json`` first. A missing
-    or invalid file falls back to RSS. Exa runs only when EXA_ENABLED=1.
+    The Friday newsletter reads ``sources/<window end>.json`` first. A Monday
+    window end still reads that Monday's file. A missing or invalid file
+    falls back to RSS. Exa runs only when EXA_ENABLED=1.
     """
     until = _utc(until)
     since = _utc(since)

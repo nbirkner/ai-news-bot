@@ -1,12 +1,12 @@
 # Weekly sources
 
-The Monday newsletter (Monday 9 AM PT) reads one committed file before it reads RSS:
+The Friday newsletter (Friday 9 AM PT) reads one committed file before it reads RSS:
 
 ```text
 sources/<YYYY-MM-DD>.json
 ```
 
-`<YYYY-MM-DD>` is the window end on the Pacific calendar (`America/Los_Angeles`). `--window-end 2026-10-19` reads `sources/2026-10-19.json`, including when that instant is Monday 9 AM PT.
+`<YYYY-MM-DD>` is the window end on the Pacific calendar (`America/Los_Angeles`). `--window-end 2026-11-13` reads `sources/2026-11-13.json`, including when that instant is Friday 9 AM PT. A Monday window end still reads that Monday's file. `--window-end 2026-10-19` reads `sources/2026-10-19.json`, and `sources/2026-11-02.json` stays valid.
 
 Mon/Wed/Fri briefing runs do not read this directory. They use RSS only.
 

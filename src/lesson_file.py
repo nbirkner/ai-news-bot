@@ -179,9 +179,11 @@ def lesson_for_date(date: str, directory: Path | None = None) -> LessonFile:
 def week_lesson(issue_date: str, directory: Path | None = None) -> LessonFile | None:
     """Lesson for the Monday-Sunday week of ``issue_date``, or None.
 
-    The Monday newsletter uses this. A missing directory, a missing file,
-    or a file that does not validate omits the section. It does not fail
-    the news issue.
+    The Friday newsletter uses this, and so does a Monday-dated issue. The
+    week stays Monday through Sunday, so a Friday issue and a backfilled
+    Monday issue both find the lesson filed in that calendar week. A missing
+    directory, a missing file, or a file that does not validate omits the
+    section. It does not fail the news issue.
     """
     try:
         day = datetime.strptime(issue_date, "%Y-%m-%d").date()
