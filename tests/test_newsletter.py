@@ -94,6 +94,48 @@ def test_slack_mdx_and_email_come_from_the_same_issue():
     assert "for Together" not in html
 
 
+def test_mdx_escapes_scraped_text_and_rejects_unsafe_urls():
+    issue = _issue()
+    issue.summary = "A <b>summary</b> & a {brace}"
+    issue.items[0].what_happened = "A <img src=x onerror=alert(1)> headline"
+    issue.items[0].body = "Body with <img src=x onerror=alert(1)> and {alert(1)}."
+    issue.items[0].why_it_matters = "Why {alert(1)} matters [click](javascript:alert(1))"
+    issue.items[0].source_name = "Vercel <script>"
+    issue.items[0].url = "javascript:alert(1)"
+    issue.also_in_window = ("Also <b>bold</b> & {braces}",)
+    lesson = type("Lesson", (), {
+        "title": "Lesson <title> & {x}",
+        "summary": "Summary {alert(1)} <b>",
+        "web_url": "https://example.com/lesson(1)<script>",
+    })()
+
+    mdx = render_mdx(issue, lesson=lesson)
+    body = mdx.split("---", 2)[2]
+
+    assert "<img" not in body
+    assert "<b>" not in body
+    assert "{alert(1)}" not in body
+    assert "javascript:" not in body.replace("&#91;click&#93;(javascript:", "")
+    assert "[click]" not in body
+    assert "&lt;img src=x onerror=alert(1)&gt;" in body
+    assert "&#123;alert(1)&#125;" in body
+    assert "&amp;" in body
+    assert "[Vercel &lt;script&gt;](#)" in body
+    assert "[Read the lesson](https://example.com/lesson%281%29%3Cscript%3E)" in body
+
+
+def test_mdx_plain_text_output_is_unchanged():
+    issue = _issue()
+    mdx = render_mdx(issue)
+    assert "Tokens and dollars are splitting" in mdx
+    assert "71.5%" in mdx
+    assert issue.items[0].why_it_matters in mdx
+    assert f"[Vercel]({issue.items[0].url})" in mdx
+    assert "&lt;" not in mdx
+    assert "&#123;" not in mdx
+    assert "&amp;" not in mdx
+
+
 def test_rank_prompt_has_no_together_angle():
     prompt = _rank_prompt([_article()], [], 7).lower()
     assert "people building with ai" in prompt

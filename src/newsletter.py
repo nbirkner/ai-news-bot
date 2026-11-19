@@ -76,6 +76,33 @@ def _also_line(issue) -> str:
     return "Also in the window: " + "; ".join(titles) + "."
 
 
+def _mdx_text(value) -> str:
+    """Escape scraped or model text so MDX renders it as literal text, not markup."""
+    text = str(value or "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("{", "&#123;")
+        .replace("}", "&#125;")
+        .replace("[", "&#91;")
+        .replace("]", "&#93;")
+    )
+
+
+def _mdx_url(url) -> str:
+    """Only public http(s) links survive. Everything else falls back to '#'."""
+    raw = str(url or "").strip()
+    if not (raw.startswith("http://") or raw.startswith("https://")):
+        return "#"
+    return (
+        raw.replace("(", "%28")
+        .replace(")", "%29")
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+    )
+
+
 def _lesson_bits(lesson) -> tuple:
     """Title, summary, and public URL for an optional Monday lesson section."""
     if not lesson:
@@ -101,33 +128,33 @@ def render_mdx(issue, *, lesson=None) -> str:
     ]
     stamp = window_line(issue)
     if stamp:
-        lines.extend([stamp, ""])
+        lines.extend([_mdx_text(stamp), ""])
     if issue.summary:
-        lines.extend([issue.summary, ""])
+        lines.extend([_mdx_text(issue.summary), ""])
     for item in issue.items:
         lines.extend([
-            f"**{item.what_happened}**",
+            f"**{_mdx_text(item.what_happened)}**",
             "",
-            item.body,
+            _mdx_text(item.body),
             "",
-            item.why_it_matters,
+            _mdx_text(item.why_it_matters),
             "",
-            f"[{item.source_name}]({item.url})",
+            f"[{_mdx_text(item.source_name)}]({_mdx_url(item.url)})",
             "",
         ])
     also = _also_line(issue)
     if also:
-        lines.extend([also, ""])
+        lines.extend([_mdx_text(also), ""])
     lesson_title, lesson_summary, lesson_url = _lesson_bits(lesson)
     if lesson_title:
         lines.extend([
             "## This week's lesson",
             "",
-            f"**{lesson_title}**",
+            f"**{_mdx_text(lesson_title)}**",
             "",
-            lesson_summary,
+            _mdx_text(lesson_summary),
             "",
-            f"[Read the lesson]({lesson_url})",
+            f"[Read the lesson]({_mdx_url(lesson_url)})",
             "",
         ])
     return "\n".join(lines).rstrip() + "\n"
