@@ -1,0 +1,98 @@
+[
+  {
+    "title": "Anthropic raised $81.3 billion in the largest IPO on record, and its stock closed up 17% on day one",
+    "url": "https://www.cnbc.com/2026/11/19/anthropic-ipo-ant-live-updates.html",
+    "source": "CNBC",
+    "summary": "Anthropic priced 980 million Class A shares at $83 on November 18, and the stock opened on Nasdaq under ANT at $111.50 on November 19 before closing at $97.17. CNBC put its fully diluted market cap at roughly $1.8 trillion at the close, with more than 846 million shares traded, versus 522 million on SpaceX's opening day in June. The prospectus shows $33.24 billion in revenue for the nine months ended September 30, up about 1,200% year over year. On Friday, November 20, its first full day of trading, the stock fell 14%, drifting back toward the $83 IPO price as an AI sell-off also pulled down Nvidia, AMD, Amazon, and Microsoft (CNBC, https://www.cnbc.com/2026/11/20/anthropic-stock-ai-amd-nvidia.html).",
+    "published": "2026-11-19",
+    "reflection": "A frontier lab now has quarterly public reporting and a share price that reacts to every model launch and safety decision, so investors will start pricing things like held-back models and compute deals in real time."
+  },
+  {
+    "title": "An Anthropic mathematician claims he and Claude proved the Riemann Hypothesis, posted as a Lean proof that experts have not yet verified",
+    "url": "https://www.scientificamerican.com/article/anthropic-mathematician-claims-to-prove-riemann-hypothesis-most-famous-problem-in-all-of-math/",
+    "source": "Scientific American",
+    "summary": "On Friday, November 20, Levent Alpöge, a mathematician who works at Anthropic, wrote on his website: \"I believe I have, working with Claude, discovered a proof of the Riemann Hypothesis.\" He says the proof covers the Generalized Riemann Hypothesis. He posted it as code in the Lean proof language rather than as a readable paper. The 1859 conjecture about how the primes are distributed is the most famous open problem in math and carries a Clay Mathematics Institute million-dollar prize. Experts still need to check that the Lean statement matches the real hypothesis and that the proof holds.",
+    "published": "2026-11-20",
+    "reflection": "Shipping a famous proof as machine-checkable Lean instead of a paper changes what verification means: the open question is whether the formal statement is the right one, not whether every step is right."
+  },
+  {
+    "title": "OpenAI released GPT-6.2 Astra and GPT-6.2 Sol, with Astra's API prices cut 20%",
+    "url": "https://openai.com/index/introducing-gpt-6-2-astra-sol/",
+    "source": "OpenAI",
+    "summary": "Astra costs $8 per million input tokens, $0.40 cached, and $40 output, 20% below GPT-6 Astra on input and output. OpenAI says Astra scores 5.2 points above GPT-6 Astra on Agents' Last Exam at less than a third of the cost, and 9 points higher on Terminal-Bench-Science 0.1. Sol keeps GPT-6.1 Sol's prices and comes within 0.5 points of Astra on Cognition's FrontierCode 2.0 at about one-fifth the cost.",
+    "published": "2026-11-17",
+    "reflection": "When the cheap tier lands within half a point of the flagship on real merge-quality coding, the default choice for most agent work flips to the smaller model, and the flagship has to earn its price on long, messy tasks."
+  },
+  {
+    "title": "OpenAI says its coding agents now finish 46% of two-to-four-hour research tasks on their own, up from 23% in March",
+    "url": "https://openai.com/index/research-acceleration-jagged-frontier/",
+    "source": "OpenAI",
+    "summary": "For four-to-eight-hour tasks, estimated success rose from 13% to 35% between March and October, but it varies a lot by job: 79% for monitoring training runs, 35% for launching them, and 25% for writing inference and serving code. The median researcher's daily agent usage hit $2,400 at API list prices in October, up 62% from September, and $23,000 at the 90th percentile. OpenAI repeated its call for labs to be required to publicly report indicators of recursive self-improvement.",
+    "published": "2026-11-18",
+    "reflection": "The uplift is lopsided toward watching and checking work rather than building infrastructure, which suggests that the first parts of AI research to automate are the ones with the clearest pass or fail signal."
+  },
+  {
+    "title": "California proposed state-set AI safety standards, emergency shutdown authority, and power to cap recursive self-improvement",
+    "url": "https://www.gov.ca.gov/2026/11/18/governor-newsoms-nation-leading-ai-safety-framework-is-getting-even-stronger-as-california-releases-next-steps-on-mandatory-safety-standards-and-oversight/",
+    "source": "Governor of California",
+    "summary": "Governor Newsom's recommendations say the state, not companies, should set baseline standards for all AI developers, with independent safety testing through training, development, and deployment. They also expand incident reporting, require verified risk-containment protocols so the state can order an immediate shutdown in an emergency, and give authority to cap the development and use of recursive self-improvement.",
+    "published": "2026-11-18",
+    "reflection": "A cap on recursive self-improvement only works if someone can measure it, which is exactly the kind of metric OpenAI published the same day, so lab self-reports may turn into the inputs regulators enforce against."
+  },
+  {
+    "title": "Google launched Gemini 4 Neon at $3 in and $15 out per million tokens, ranking #3 on the Artificial Analysis Intelligence Index",
+    "url": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon/",
+    "source": "Google",
+    "summary": "Neon scores 61 on the Artificial Analysis index at its xhigh thinking level and 70.9% on the Vals Index, where it ranks #2. Cached input costs $0.15 per million tokens, a 95% discount, and the context window is 1 million tokens. Google also reports #1 on Zapier's AutomationBench (56.3%) and $16,843 on Andon Labs' Vending-Bench 2, and pitches Neon as an orchestrator directing parallel Hydrogen subagents.",
+    "published": "2026-11-18",
+    "reflection": "Google is selling a two-tier agent setup, a mid-priced planner plus cheap workers, which turns model choice into a team design question rather than a single pick."
+  },
+  {
+    "title": "Microsoft released seven MAI models built to undercut OpenAI and Anthropic on price",
+    "url": "https://microsoft.ai/news/microsoft-ignite-2026/",
+    "source": "Microsoft AI",
+    "summary": "Microsoft says MAI Code 2 reaches 98% of GPT-6.1 Sol's coding quality at about 40% of the price, and 96% of Claude Opus 5.5's at 5% of the price, averaged over four coding benchmarks. MAI Cyber 2 Flash beats GPT-6 Astra on CyberGym-E2E at less than 2% of the cost per task, and MAI Realtime 1 starts at $0.01 per audio minute. Its Maia 200 chip is now in production at 1.7x more tokens per watt.",
+    "published": "2026-11-17",
+    "reflection": "Microsoft says outright these models are not tuned for hard science or very long agent work, which is an honest bet that most enterprise token spend goes to routine tasks where \"good enough and cheap\" wins."
+  },
+  {
+    "title": "Isomorphic Labs raised $5 billion to take AI-designed drugs into clinical trials",
+    "url": "https://techcrunch.com/2026/11/17/isomorphic-labs-raises-5b-as-it-looks-to-take-drug-candidates-to-clinical-trials/",
+    "source": "TechCrunch",
+    "summary": "The Series C was co-led by Greenoaks and Sequoia, with Andreessen Horowitz joining and all existing backers investing again, six months after a $2.1 billion Series B in May. The DeepMind spinout reports positive preclinical results in oncology and immunology and has deals with Eli Lilly, Novartis, and Johnson & Johnson. It did not disclose a valuation; Bloomberg had reported a target of $50 billion.",
+    "published": "2026-11-17",
+    "reflection": "Raising this much before any human trial data means investors are paying for the design engine itself, and the clinic will be the first real test of whether AI-designed molecules beat the industry's usual failure rates."
+  },
+  {
+    "title": "OpenAI launched ChatGPT Wallet so its agents can pay for things without ever seeing your card number",
+    "url": "https://openai.com/index/introducing-chatgpt-wallet",
+    "source": "OpenAI",
+    "summary": "Built with American Express, Chase, Mastercard, and Visa, the wallet starts with ChatGPT Pro subscribers in the US through dots. Each purchase needs a review of items, total, and card, then a security check such as Face ID, after which the network issues a payment token in place of the real card details. OpenAI says ChatGPT has 1.2 billion weekly users and expects to add pre-approved spending limits and categories later.",
+    "published": "2026-11-13",
+    "reflection": "Putting the card networks in the loop moves agent shopping onto existing rewards, fraud, and dispute rails, so the harder problem left is getting sites to stop blocking agents."
+  },
+  {
+    "title": "New York's attorney general created a unit to enforce the RAISE Act, which takes effect January 1, 2027",
+    "url": "https://ag.ny.gov/press-release/2026/attorney-general-james-announces-creation-ai-safety-standards-enforcement-and",
+    "source": "New York State Attorney General",
+    "summary": "The AI Safety, Standards, Enforcement, and Transparency (ASSET) Unit will enforce the RAISE Act, which requires AI developers to publicly disclose their safety measures and quickly report security and safety incidents. It will also develop new policy proposals and provide technical expertise across the office. Attorney General James also encouraged AI company employees to file whistleblower complaints with her office.",
+    "published": "2026-11-17",
+    "reflection": "A dedicated enforcement team six weeks before the law starts signals that incident reporting in New York will be actively checked, not just filed."
+  },
+  {
+    "title": "NVIDIA released Nemotron for Science, an open model, chemistry dataset, and recipes for building science agents",
+    "url": "https://nvidianews.nvidia.com/news/nvidia-introduces-nemotron-for-science-to-accelerate-discoveries-with-agents",
+    "source": "NVIDIA",
+    "summary": "The package is built on the open Nemotron 3.5 Super VL model and includes LitmusBench v0.2, an open dataset of nearly 50,000 chemistry reasoning questions. NVIDIA says Lila Sciences post-trained it with lab feedback to reach 61% accuracy on quantum dot synthesis, above GPT-6 Astra's 54%, at 10 to 20x lower inference cost. Argonne National Laboratory is among the institutions using it.",
+    "published": "2026-11-16",
+    "reflection": "A small open model tuned on a lab's own feedback beating a frontier model on that lab's task is a strong argument for science teams to own their post-training rather than rent general intelligence."
+  },
+  {
+    "title": "Two House committee chairs urged removing Chinese open-weight AI models from federal systems and high-risk critical infrastructure",
+    "url": "https://homeland.house.gov/2026/11/20/chairmen-garbarino-moolenaar-release-joint-investigative-report-urging-removal-of-prc-open-weight-models-from-federal-systems-high-risk-critical-infrastructure/",
+    "source": "House Committee on Homeland Security",
+    "summary": "On November 20, Homeland Security Chairman Andrew Garbarino and China Select Committee Chairman John Moolenaar released a joint report on U.S. companies using open-weight models from Chinese labs. The investigation, launched in April 2026, corresponded with Airbnb (Alibaba models in customer support), Anysphere (Cursor's flagship model built on a Moonshot AI base model), and DoorDash. Its 12 recommendations include prohibiting PRC-developed models in federal systems and federal contract work, removing them from high-risk critical infrastructure functions, barring federal cybersecurity grant funds from buying them, and building an American open-weight alternative.",
+    "published": "2026-11-20",
+    "reflection": "The report pairs restrictions with a call for a U.S. open-weight alternative, which admits the real draw of these models is price and capability, not just availability."
+  }
+]
