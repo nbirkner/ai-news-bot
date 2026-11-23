@@ -1,11 +1,11 @@
-"""The Monday newsletter send. HTTP is mocked. Nothing is posted to Slack."""
+"""The Friday newsletter send. HTTP is mocked. Nothing is posted to Slack."""
 
 import json
 from datetime import datetime, timezone
 
 import pytest
 
-from src.issue_run import pacific_monday, parse_window_end, weekly_window_start
+from src.issue_run import pacific_friday, parse_window_end, weekly_window_start
 from src.models import BriefingItem, Issue
 from src.newsletter import email_subject
 
@@ -95,11 +95,18 @@ def _send_env(monkeypatch):
     monkeypatch.setenv("RESEND_AUDIENCE_ID", AUDIENCE)
 
 
-def test_weekly_window_opens_on_the_previous_monday():
+def test_weekly_window_opens_seven_days_before_the_end():
+    assert weekly_window_start(parse_window_end("2026-11-13")) == datetime(2026, 11, 6, 15, tzinfo=timezone.utc)
+    # Past Monday issues keep a Monday-to-Monday week. The date is not moved to Friday.
     assert weekly_window_start(parse_window_end("2026-10-19")) == datetime(2026, 10, 12, 15, tzinfo=timezone.utc)
+    assert weekly_window_start(parse_window_end("2026-10-26")) == datetime(2026, 10, 19, 15, tzinfo=timezone.utc)
+    assert weekly_window_start(parse_window_end("2026-11-02")) == datetime(2026, 10, 26, 15, tzinfo=timezone.utc)
+    assert weekly_window_start(parse_window_end("2026-11-09")) == datetime(2026, 11, 2, 15, tzinfo=timezone.utc)
+    assert parse_window_end("2026-11-09") == datetime(2026, 11, 9, 15, tzinfo=timezone.utc)
     wednesday = datetime(2026, 10, 21, 16, tzinfo=timezone.utc)
-    assert pacific_monday(wednesday) == "2026-10-19"
-    assert pacific_monday(datetime(2026, 10, 19, 16, tzinfo=timezone.utc)) == "2026-10-19"
+    assert pacific_friday(wednesday) == "2026-10-16"
+    assert pacific_friday(datetime(2026, 10, 23, 16, tzinfo=timezone.utc)) == "2026-10-23"
+    assert pacific_friday(datetime(2026, 10, 19, 16, tzinfo=timezone.utc)) == "2026-10-16"
 
 
 def test_dry_run_does_not_call_resend_or_save_state(tmp_path, monkeypatch, capsys):
@@ -582,6 +589,30 @@ def test_workflow_dispatch_on_saturday_does_not_send(tmp_path, monkeypatch):
     assert code == 2
     assert calls == []
     assert generated == []
+    code = main(["main_newsletter.py", "--send", "--window-end", "2026-11-13"])
+    assert code == 2
+    assert calls == []
+
+
+def test_allow_off_day_sends_a_monday_window_without_moving_it(tmp_path, monkeypatch):
+    calls, generated, _output = _install(monkeypatch, tmp_path)
+    _send_env(monkeypatch)
+    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("SCHEDULE_NOW", "2026-11-14T18:00:00Z")
+    monkeypatch.setenv("ALLOW_OFF_DAY", "1")
+    from main_newsletter import main
+    code = main([
+        "main_newsletter.py",
+        "--send",
+        "--window-end",
+        "2026-11-09",
+        "--window-start",
+        "2026-11-02T15:00:00Z",
+    ])
+    assert code == 0
+    assert generated[0]["until"] == datetime(2026, 11, 9, 15, tzinfo=timezone.utc)
+    assert generated[0]["since"] == datetime(2026, 11, 2, 15, tzinfo=timezone.utc)
+    assert calls
 
 
 def test_readme_names_the_resend_secrets():

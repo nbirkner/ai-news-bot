@@ -1,14 +1,18 @@
-"""Monday send window for the GitHub Actions schedule.
+"""Friday send window for the GitHub Actions schedule.
 
 GitHub has started the 16:00 and 17:00 UTC crons five to seven hours late
-(verified 26 Oct, 2 Nov, and 9 Nov 2026). A run that is still on Monday in
-America/Los_Angeles, from 09:00 through 23:59, may send only after
-``send_from``. A later run reports every expected Monday from that date
-through the current week that is still unsent.
+(verified 26 Oct, 2 Nov, and 9 Nov 2026, when the send day was Monday). A run
+that is still on Friday in America/Los_Angeles, from 09:00 through 23:59, may
+send only after ``send_from``. A later run reports every expected Friday from
+that date through the current week that is still unsent.
 
 The crons do not guarantee a 9:00 start. GitHub can delay or drop every run.
 ``send_from`` empty means a scheduled run does not send and does not alarm,
 including for weeks that already passed before this schedule was armed.
+
+An explicit Monday issue date stays valid. Those dispatches still wait for
+Monday locally unless ``allow_off_day`` is set, so a backfill of a past
+Monday uses the same rule it used before the send day moved to Friday.
 """
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 SEND_START_HOUR = 9
+SEND_WEEKDAY = 4  # Friday
+HISTORICAL_WEEKDAY = 0  # Monday issues already filed, including the backfill
 
 
 @dataclass(frozen=True)
@@ -32,11 +38,19 @@ def as_utc(when: datetime) -> datetime:
     return when.astimezone(timezone.utc)
 
 
+def send_week_friday(day: date) -> date:
+    """Friday that opened the send week containing `day`.
+
+    Saturday through Thursday belong to the Friday already under way, so the
+    issue date is never a future Friday.
+    """
+    return day - timedelta(days=(day.weekday() - SEND_WEEKDAY) % 7)
+
+
 def target_issue_date(when: datetime) -> str:
-    """Pacific Monday of the week that contains `when`."""
+    """Pacific Friday of the send week that contains `when`."""
     pacific = as_utc(when).astimezone(PACIFIC)
-    monday = pacific.date() - timedelta(days=pacific.weekday())
-    return monday.isoformat()
+    return send_week_friday(pacific.date()).isoformat()
 
 
 def load_send_from(path) -> date | None:
@@ -62,19 +76,19 @@ def parse_send_from(value: str | None) -> date | None:
     return date.fromisoformat(raw)
 
 
-def first_expected_monday(send_from: date) -> date:
-    """The first Monday on or after the activation date."""
-    return send_from + timedelta(days=(0 - send_from.weekday()) % 7)
+def first_expected_friday(send_from: date) -> date:
+    """The first Friday on or after the activation date."""
+    return send_from + timedelta(days=(SEND_WEEKDAY - send_from.weekday()) % 7)
 
 
-def expected_mondays(send_from: date | None, through: date) -> list[str]:
-    """Monday issue dates from activation through `through`, inclusive.
+def expected_fridays(send_from: date | None, through: date) -> list[str]:
+    """Friday issue dates from activation through `through`, inclusive.
 
     Dates before activation are not expected, so old missed weeks do not alarm.
     """
-    if send_from is None or through < first_expected_monday(send_from):
+    if send_from is None or through < first_expected_friday(send_from):
         return []
-    day = first_expected_monday(send_from)
+    day = first_expected_friday(send_from)
     found = []
     while day <= through:
         found.append(day.isoformat())
@@ -82,24 +96,32 @@ def expected_mondays(send_from: date | None, through: date) -> list[str]:
     return found
 
 
-def manual_send_allowed(when: datetime, issue_date: str, *, allow_off_monday: bool) -> tuple[bool, str]:
-    """A manual audience send has to name a Monday, and it has to be Monday locally.
+def manual_send_allowed(when: datetime, issue_date: str, *, allow_off_day: bool) -> tuple[bool, str]:
+    """A manual audience send names a Friday, and it has to be Friday locally.
 
-    ``allow_off_monday`` is the explicit override for a catch-up the owner asked
+    A Monday ``issue_date`` stays valid and still has to be Monday locally.
+    That is the backfill path for 2026-10-26, 2026-11-02, and 2026-11-09.
+    ``allow_off_day`` is the explicit override for a catch-up the owner asked
     for. A weekend dispatch without it does not send.
     """
     try:
         day = date.fromisoformat((issue_date or "").strip())
     except ValueError:
         return False, "The issue date is not YYYY-MM-DD. Not sending."
-    if day.weekday() != 0:
-        return False, f"{issue_date} is not a Monday. Not sending."
+    if day.weekday() == HISTORICAL_WEEKDAY:
+        required = HISTORICAL_WEEKDAY
+        required_name = "Monday"
+    elif day.weekday() == SEND_WEEKDAY:
+        required = SEND_WEEKDAY
+        required_name = "Friday"
+    else:
+        return False, f"{issue_date} is not a Friday. Not sending."
     pacific = as_utc(when).astimezone(PACIFIC)
-    if pacific.weekday() != 0 and not allow_off_monday:
+    if pacific.weekday() != required and not allow_off_day:
         return (
             False,
             f"Today is {pacific.strftime('%A')} in America/Los_Angeles. "
-            "A manual send waits for Monday unless allow_off_monday is set.",
+            f"A manual send waits for {required_name} unless allow_off_day is set.",
         )
     return True, ""
 
@@ -115,7 +137,7 @@ def decide(
     """What a workflow run should do at `when`.
 
     ``send_from`` None disarms scheduled sends and missed-week alarms.
-    Manual runs still continue; ``manual_send_allowed`` is the weekend check.
+    Manual runs still continue; ``manual_send_allowed`` is the off-day check.
     """
     issue_date = target_issue_date(when)
     recorded = set(sent_dates or ())
@@ -123,13 +145,13 @@ def decide(
         recorded.add(issue_date)
     current = date.fromisoformat(issue_date)
     priors = tuple(
-        day for day in expected_mondays(send_from, current)
+        day for day in expected_fridays(send_from, current)
         if day != issue_date and day not in recorded
     )
     if not scheduled:
         return Decision(
             "send",
-            "Manual run. Scheduled send windows do not apply. Weekend sends are refused unless allow_off_monday is set.",
+            "Manual run. Scheduled send windows do not apply. Weekend sends are refused unless allow_off_day is set.",
             issue_date,
             missed=priors,
         )
@@ -139,20 +161,20 @@ def decide(
             "Scheduled sends are not activated (send_from is empty). Not sending and not alerting.",
             issue_date,
         )
-    if current < first_expected_monday(send_from):
+    if current < first_expected_friday(send_from):
         return Decision(
             "skip",
             f"{issue_date} is before send_from {send_from.isoformat()}. Not sending and not alerting.",
             issue_date,
         )
     pacific = as_utc(when).astimezone(PACIFIC)
-    in_window = pacific.weekday() == 0 and pacific.hour >= SEND_START_HOUR
+    in_window = pacific.weekday() == SEND_WEEKDAY and pacific.hour >= SEND_START_HOUR
     current_unsent = issue_date not in recorded
     if priors and in_window and current_unsent:
         return Decision(
             "send",
             (
-                f"Monday {pacific.strftime('%H:%M')} America/Los_Angeles is inside the catch-up window. "
+                f"Friday {pacific.strftime('%H:%M')} America/Los_Angeles is inside the catch-up window. "
                 f"Earlier unsent issues: {', '.join(priors)}."
             ),
             issue_date,
@@ -161,15 +183,15 @@ def decide(
     if priors and in_window:
         return Decision(
             "fail",
-            f"Earlier Monday issues were not sent: {', '.join(priors)}.",
+            f"Earlier Friday issues were not sent: {', '.join(priors)}.",
             issue_date,
             missed=priors,
         )
-    if priors or (not in_window and pacific.weekday() != 0 and current_unsent):
-        missed = priors + ((issue_date,) if current_unsent and pacific.weekday() != 0 else ())
+    if priors or (not in_window and pacific.weekday() != SEND_WEEKDAY and current_unsent):
+        missed = priors + ((issue_date,) if current_unsent and pacific.weekday() != SEND_WEEKDAY else ())
         return Decision(
             "fail",
-            f"Monday AI News was not sent: {', '.join(missed)}.",
+            f"Friday AI News was not sent: {', '.join(missed)}.",
             issue_date,
             missed=missed,
         )
@@ -177,7 +199,7 @@ def decide(
         return Decision(
             "send",
             (
-                f"Monday {pacific.strftime('%H:%M')} America/Los_Angeles "
+                f"Friday {pacific.strftime('%H:%M')} America/Los_Angeles "
                 "is inside the 09:00-23:59 catch-up window."
             ),
             issue_date,
@@ -191,7 +213,7 @@ def decide(
     return Decision(
         "skip",
         (
-            f"Monday {pacific.strftime('%H:%M')} America/Los_Angeles "
+            f"Friday {pacific.strftime('%H:%M')} America/Los_Angeles "
             "is before 09:00. Not sending."
         ),
         issue_date,

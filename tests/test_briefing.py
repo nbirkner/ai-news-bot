@@ -163,7 +163,7 @@ def test_source_outage_does_not_post_a_quiet_note(tmp_path):
         )
 
 
-def test_workflow_sends_monday_at_9am_pacific():
+def test_workflow_sends_friday_at_9am_pacific():
     from pathlib import Path
     text = Path(".github/workflows/briefing.yml").read_text()
     assert "main_newsletter.py" in text
@@ -175,11 +175,19 @@ def test_workflow_sends_monday_at_9am_pacific():
     assert "EXA_API_KEY" in text
     assert "RESEND_API_KEY" in text
     assert "RESEND_AUDIENCE_ID" in text
-    assert 'cron: "0 16-23 * * 1"' in text
-    assert 'cron: "0 0-7 * * 2"' in text
-    assert 'cron: "30 8 * * 2,3,4"' in text
+    assert 'cron: "0 16-23 * * 5"' in text
+    assert 'cron: "0 0-7 * * 6"' in text
+    assert 'cron: "30 8 * * 6,0,1"' in text
+    assert 'cron: "0 16-23 * * 1"' not in text
+    assert 'cron: "0 0-7 * * 2"' not in text
+    assert 'cron: "30 8 * * 2,3,4"' not in text
+    assert "pacific_friday" in text
+    assert "pacific_monday" not in text
+    assert "allow_off_day" in text
+    assert "allow_off_monday" not in text
     assert "exit 1" in text
-    assert "::error title=Monday AI News was not sent::" in text
+    assert "::error title=Friday AI News was not sent::" in text
+    assert "::error title=Earlier Friday AI News was not sent::" in text
     assert "cancel-in-progress: false" in text
     assert "group: ai-briefing" in text
     assert "America/Los_Angeles" in text

@@ -77,7 +77,7 @@ def _also_line(issue) -> str:
 
 
 def _lesson_bits(lesson) -> tuple:
-    """Title, summary, and public URL for an optional Monday lesson section."""
+    """Title, summary, and public URL for an optional weekly lesson section."""
     if not lesson:
         return "", "", ""
     title = " ".join(str(getattr(lesson, "title", "") or "").split())

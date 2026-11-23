@@ -1,7 +1,8 @@
-"""Weekly committed sources for the Monday newsletter.
+"""Weekly committed sources for the Friday newsletter.
 
 The newsletter run looks for ``sources/<YYYY-MM-DD>.json``, where the date
-is the window end on the Pacific calendar (Monday 9 AM PT is that Monday).
+is the window end on the Pacific calendar (Friday 9 AM PT is that Friday).
+A Monday window end still reads that Monday's file.
 
 The file is a JSON list. Each item is an object:
 

@@ -1,7 +1,7 @@
 """Decide whether this Actions run sends, skips, or fails.
 
 Writes `action`, `reason`, and `issue_date` to `$GITHUB_OUTPUT` when that
-file is set. Exits 0. A missed Monday is `action=fail`; the workflow turns
+file is set. Exits 0. A missed Friday is `action=fail`; the workflow turns
 that into a failed job so a skipped send is not a green check.
 
 `SCHEDULE_NOW` (ISO-8601) overrides the clock for tests. Production leaves
