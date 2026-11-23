@@ -5,6 +5,7 @@ import pytest
 
 from src.discover import prepare_candidates
 from src.models import Article, FetchReport
+from src.sources_file import window_end_filename_date
 
 
 def _article(title, url, published, text):
@@ -30,10 +31,22 @@ def _block_network(monkeypatch):
     monkeypatch.setattr("requests.Session.request", boom)
 
 
+def _use_empty_sources(tmp_path, monkeypatch):
+    """Keep these tests on a missing sources file, not a committed repo copy."""
+    directory = tmp_path / "sources"
+    directory.mkdir()
+
+    def path_for(until, root=None):
+        return directory / f"{window_end_filename_date(until)}.json"
+
+    monkeypatch.setattr("src.issue_run.sources_path_for", path_for)
+
+
 def test_missing_nov9_sources_dry_run_keeps_fresh_rss_and_does_not_send(tmp_path, monkeypatch):
     _block_network(monkeypatch)
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    _use_empty_sources(tmp_path, monkeypatch)
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
     fresh = _article(
@@ -101,6 +114,7 @@ def test_missing_sources_and_no_fresh_rss_blocks_without_sending(tmp_path, monke
     _block_network(monkeypatch)
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    _use_empty_sources(tmp_path, monkeypatch)
 
     def fetcher(config, since, now):
         return FetchReport(
@@ -134,6 +148,7 @@ def test_private_together_copy_blocks_the_dry_run(tmp_path, monkeypatch):
     _block_network(monkeypatch)
     monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    _use_empty_sources(tmp_path, monkeypatch)
     fresh = _article(
         "A public chip order",
         "https://www.reuters.com/technology/public-chip-order-2026-11-08/",
