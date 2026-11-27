@@ -1,0 +1,82 @@
+[
+  {
+    "title": "The Lean community certified a 17-million-line, Claude-assisted proof of the Riemann Hypothesis one day after its release",
+    "url": "https://leanprover-community.github.io/blog/posts/riemann-hypothesis/",
+    "source": "Lean FRO and Mathlib Initiative",
+    "summary": "Anthropic mathematician Levent Alpöge released the proof on November 20 as a Lean library of 17 million lines, and on November 21 the Lean FRO and the Mathlib Initiative said they had \"full confidence\" it is correct. Their statement says two independent tools confirmed the theorem proved is exactly Mathlib's own statement of the hypothesis, and that several separate proof checkers accepted it. MIT's Andrew Sutherland reports the 175,187-file source compiles without errors and two independently written kernels, nanoda and con-leche, accept the full exported proof; his page also notes a shorter Lean proof was published on November 25 (https://math.mit.edu/~drew/grh/).",
+    "published": "2026-11-21",
+    "reflection": "For a problem first posed in 1859, the checking that settled trust took about a day and was mostly about confirming the computer verified the right statement, so the hard human work left is understanding the new ideas."
+  },
+  {
+    "title": "OpenAI posted a preprint claiming the exponent of matrix multiplication is exactly 9/4, which would rule out the long-hoped-for value of 2",
+    "url": "https://github.com/openai/math/tree/main/preprints/The-matrix-multiplication-exponent-is-nine-fourths-November-24-2026",
+    "source": "OpenAI (GitHub)",
+    "summary": "The paper proves a matching lower bound: for every n of 2 or more, a formal arithmetic circuit multiplying two n by n matrices needs at least n^(9/4)/2 multiplication or division gates, rounded up. It sits in OpenAI's public math repository, which now holds 730 manuscripts in 375 families produced by an unnamed internal model, with about 42% of top-line results formalized in Lean (https://github.com/openai/math). The Lean proof for this result covers a narrower setting, division-free circuits.",
+    "published": "2026-11-24",
+    "reflection": "If it holds, no clever algorithm will ever make multiplying huge matrices nearly as cheap as just writing down the answer, a theoretical floor rather than a speedup, since GPUs still use the classic method."
+  },
+  {
+    "title": "OpenAI's chief scientist proposed shared industry limits on AI development based on perplexity, and published OpenAI's internal numbers",
+    "url": "https://openai.com/index/perplexity-and-intelligence/",
+    "source": "OpenAI",
+    "summary": "Jakub Pachocki reports log-perplexity of about 0.99 for GPT-3.5 and about 0.91 for GPT-4 on OpenAI's internal code dataset, with current models below 0.8, and says groundbreaking math results began once a model reached about 0.76. He expects more transformative capabilities in the 0.68 to 0.7 window and proposes common limits that labs would not cross until monitoring reaches a concrete milestone, such as a successor to chain-of-thought monitors. He names weaknesses himself, including that chain-of-thought reasoning raises capability without lowering perplexity.",
+    "published": "2026-11-22",
+    "reflection": "Benchmarks go stale every year, so a pretraining number is one of the few yardsticks that could stay comparable long enough for labs or regulators to set a cap against it."
+  },
+  {
+    "title": "Nvidia reinstated Jensen Huang as CEO after input from the US government, and its stock closed up 31%",
+    "url": "https://www.cnbc.com/2026/11/23/nvidia-jensen-huang-ceo.html",
+    "source": "CNBC",
+    "summary": "The board voted unanimously on November 23 to bring Huang back, saying it \"received input from senior levels of the United States government\" and that his return \"poses no national security risk.\" The stock had lost nearly 33% after he admitted an extramarital affair on November 8, and an independent investigation by Wachtell, Lipton, Rosen & Katz continues. Huang is scheduled for a closed-door congressional interview on December 1 and a public Senate Banking hearing on December 3. By Friday, November 27, CNBC reported the gains had faded by Tuesday's close; Nvidia closed at $149.30 on Wednesday, a $3.6 trillion market cap about $2 trillion below its October peak (CNBC, https://www.cnbc.com/2026/11/27/tech-download-jensen-huang-ai-market.html).",
+    "published": "2026-11-23",
+    "reflection": "The board says government input shaped who runs the most important AI chip company, so chip policy and Nvidia governance are now the same story."
+  },
+  {
+    "title": "Nvidia paused AI server shipments to Malaysia, Singapore, Thailand, and Indonesia to check export compliance",
+    "url": "https://techcrunch.com/2026/11/26/nvidia-hits-pause-on-chip-shipments-to-southeast-asia/",
+    "source": "TechCrunch",
+    "summary": "Citing the Wall Street Journal, TechCrunch reports Nvidia told partners including Dell and Super Micro to hold server shipments to the four countries for an unspecified period. The pause follows a Commerce Department move earlier this month to close a loophole that let Chinese companies use Nvidia chips remotely from data centers there. The Institute for Progress estimates such remote data centers supply about 24% of China's AI computing power. On Friday, November 27, Singapore's Deputy Prime Minister Gan Kim Yong said Singapore has not confirmed the reported halt, and that the government is engaging local companies on the impact of the new US rule requiring export licences for advanced chips in Singapore, Thailand, Malaysia, Indonesia, and Brazil (The Business Times, https://www.businesstimes.com.sg/singapore/singapore-has-not-confirmed-reports-nvidia-shipment-halts-dpm-gan).",
+    "published": "2026-11-26",
+    "reflection": "Export rules now follow where a chip is used from, not just where it ships, which turns every overseas data center into something the seller has to vouch for."
+  },
+  {
+    "title": "OpenAI says GPT-6 models can design protein shapes and sequences with reasoning and code alone, and 35 of 322 lab-tested designs bound their targets",
+    "url": "https://openai.com/index/gpt-6-models-demonstrate-intrinsic-protein-design-capabilities/",
+    "source": "OpenAI",
+    "summary": "In lab tests with partner Onava, 35 of 322 minibinders (10.9%) bound their intended target across 5 targets, including 18 hits for IL-17A and 5 for PD-L1. Specialized models supplied amino acid sequences and helped pick candidates, so OpenAI says this does not yet show end-to-end design without them. Predicting a full protein structure from its sequence remained well behind specialized models.",
+    "published": "2026-11-24",
+    "reflection": "A general model that can be steered in plain language toward a binding site is a different tool from a specialist model, but the honest limits section shows the specialists still do the filtering that makes the hits possible."
+  },
+  {
+    "title": "Google DeepMind used teams of Gemini 4 agents to make quantum algorithms up to 11.8 times cheaper, with every result proved in Lean",
+    "url": "https://deepmind.google/blog/finding-faster-quantum-algorithms-with-agents-and-formal-verification/",
+    "source": "Google DeepMind",
+    "summary": "For a quantity used in laser-driven fusion, the agents cut computing cost 11.8 times and lowered memory from 5,650 to 4,338 error-corrected qubits. For Cytochrome P450, an enzyme that breaks down most human medicines, they found a 2.5 times improvement and cut qubits from 481 to 333. Independent agent teams met every four hours at a virtual conference to trade ideas, and DeepMind is open-sourcing the Lean library.",
+    "published": "2026-11-23",
+    "reflection": "Quantum circuits this large can't be tested on any existing machine, so a formal proof is the only way to know they work, which makes this a clean case of proof checkers letting people trust agent research they could never test."
+  },
+  {
+    "title": "Anthropic launched Claude Ship, which can review, fix, and approve routine pull requests under a policy file each team writes",
+    "url": "https://claude.com/resources/articles/introducing-claude-ship",
+    "source": "Anthropic",
+    "summary": "Claude Ship pairs the generally available Code Review with two beta agents: PR Steward, which fixes failing checks and conflicts but does not approve or merge, and Claude Approvals, which applies a team's approval policy. Anthropic says on the Claude Code team, merged pull requests more than doubled from June to September while the share reverted fell by more than 40%. It works on Team and Enterprise plans for GitHub repositories and recommends running approvals in observe-only mode first.",
+    "published": "2026-11-23",
+    "reflection": "Letting an agent give the final approval moves the human checkpoint from every change to writing the rules, so the policy file becomes the thing to review carefully."
+  },
+  {
+    "title": "A coalition of 42 attorneys general moved to block Character.AI's bankruptcy auction of chat histories from more than 21 million US accounts",
+    "url": "https://oag.ca.gov/news/press-releases/attorney-general-bonta-opposes-asset-sale-characterai-amid-child-safety-concerns",
+    "source": "California Attorney General",
+    "summary": "More than 2.1 million of those accounts are registered to minors, and the chats, IP addresses, and other metadata are set for auction on December 1, 2026. The states say the deal puts no privacy duties on the buyer, and that the only disclosed bidder, Smirks and Pangs Acquisition LLC, was formed on November 13, one day before it was picked as the base bid. They ask the court to deny its proposed $350,000 break-up fee.",
+    "published": "2026-11-24",
+    "reflection": "Chatbot conversations are some of the most personal data people create, and this is the first big test of whether a privacy promise survives the company that made it."
+  },
+  {
+    "title": "CrowdStrike agreed to buy Zscaler for about $43.9 billion in stock, pitching the deal as security for AI agents",
+    "url": "https://ir.crowdstrike.com/news-releases/news-release-details/crowdstrike-acquire-zscaler-bringing-network-security-and-zero/",
+    "source": "CrowdStrike",
+    "summary": "Zscaler shareholders will get 1.135 CrowdStrike shares for each Zscaler share, and the combined company expects to start with more than $10 billion in annual recurring revenue. The release frames the deal around agents connecting directly to cloud data, out of sight of traditional firewalls, and promises \"Zero Trust for AI Safety.\"",
+    "published": "2026-11-23",
+    "reflection": "A $43.9 billion deal sold mainly on agent traffic is a sign that buyers now see AI agents as a new kind of user that needs its own access controls."
+  }
+]
